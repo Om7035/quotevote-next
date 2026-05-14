@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, memo, useMemo } from 'react'
+import { useState, memo, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { isEmpty } from 'lodash'
 import moment from 'moment'
@@ -80,9 +80,18 @@ function PostCardComponent({
   const [localApprovedBy, setLocalApprovedBy] = useState<string[]>(() => approvedBy || [])
   const [localRejectedBy, setLocalRejectedBy] = useState<string[]>(() => rejectedBy || [])
 
-  // Sync if the server data refreshes from outside
-  useEffect(() => { setLocalApprovedBy(approvedBy || []) }, [approvedBy])
-  useEffect(() => { setLocalRejectedBy(rejectedBy || []) }, [rejectedBy])
+  // Sync when server data refreshes — updating state during render is the React-recommended
+  // pattern for deriving state from props without triggering a cascading effect cycle.
+  const [prevApprovedBy, setPrevApprovedBy] = useState(approvedBy)
+  const [prevRejectedBy, setPrevRejectedBy] = useState(rejectedBy)
+  if (prevApprovedBy !== approvedBy) {
+    setPrevApprovedBy(approvedBy)
+    setLocalApprovedBy(approvedBy || [])
+  }
+  if (prevRejectedBy !== rejectedBy) {
+    setPrevRejectedBy(rejectedBy)
+    setLocalRejectedBy(rejectedBy || [])
+  }
 
   const isBookmarked = userId ? bookmarkedBy.includes(userId) : false
   const hasApproved = userId ? localApprovedBy.includes(userId) : false
