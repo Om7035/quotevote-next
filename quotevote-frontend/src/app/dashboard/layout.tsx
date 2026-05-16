@@ -479,7 +479,9 @@ export default function DashboardLayout({
             )}
           >
             <DashboardSidebars />
-            <div className="mx-auto w-full max-w-2xl px-0 md:px-4">
+            {/* Full-band column matching the Home feed center (no width cap,
+                same px-4 content inset) so the center size is identical. */}
+            <div className="min-w-0 px-4">
               {children}
             </div>
           </div>
