@@ -27,9 +27,24 @@ import {
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
 import { ProfileBadge, ProfileBadgeContainer } from './ProfileBadge';
+import { cn } from '@/lib/utils';
 
 interface ProfileHeaderProps {
   profileUser: ProfileUser;
+}
+
+function getStatusLabel(status: string): string {
+  if (status === 'dnd') return 'Do Not Disturb';
+  if (status === 'invisible') return 'Invisible';
+  if (!status) return 'Online';
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+function getStatusDotClass(status: string): string {
+  if (status === 'online') return 'bg-[#52b274]';
+  if (status === 'away') return 'bg-amber-400';
+  if (status === 'dnd') return 'bg-red-500';
+  return 'bg-zinc-400';
 }
 
 export function ProfileHeader({ profileUser }: ProfileHeaderProps) {
@@ -37,6 +52,8 @@ export function ProfileHeader({ profileUser }: ProfileHeaderProps) {
   const loggedInUserId = useAppStore((state) => state.user.data._id || state.user.data.id);
   const setSelectedChatRoom = useAppStore((state) => state.setSelectedChatRoom);
   const setChatOpen = useAppStore((state) => state.setChatOpen);
+  const userStatus = useAppStore((state) => state.chat.userStatus || 'online');
+  const userStatusMessage = useAppStore((state) => state.chat.userStatusMessage || '');
   const loggedInUserIdString = typeof loggedInUserId === 'string' ? loggedInUserId : String(loggedInUserId || '');
   const [reportDialogOpen, setReportDialogOpen] = useState(false);
 
@@ -220,6 +237,20 @@ export function ProfileHeader({ profileUser }: ProfileHeaderProps) {
             )}
           </div>
           <p className="text-muted-foreground text-sm">@{username}</p>
+          {sameUser && (
+            <div className="mt-2 inline-flex items-center gap-2 rounded-full border border-border bg-muted/50 px-2.5 py-1 text-xs">
+              <span
+                className={cn('h-2 w-2 rounded-full', getStatusDotClass(userStatus))}
+                aria-hidden="true"
+              />
+              <span
+                className="text-foreground/80 truncate max-w-[260px]"
+                title={userStatusMessage || getStatusLabel(userStatus)}
+              >
+                {userStatusMessage || getStatusLabel(userStatus)}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Stats row */}
