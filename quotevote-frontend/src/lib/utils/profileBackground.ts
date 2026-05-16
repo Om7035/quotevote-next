@@ -12,8 +12,8 @@ import type {
   ProfileBackgroundPatternOption,
 } from '@/types/profile';
 
-export const DEFAULT_PROFILE_BG_COLOR = '#52b274';
-export const DEFAULT_PROFILE_BG_PATTERN: ProfileBackgroundPattern = 'none';
+export const DEFAULT_PROFILE_BG_COLOR = '#52b274'; // brand green
+export const DEFAULT_PROFILE_BG_PATTERN: ProfileBackgroundPattern = 'zigzag';
 
 /** Curated preset swatches (brand green first). */
 export const PROFILE_BG_COLORS: readonly string[] = [
