@@ -309,7 +309,10 @@ export default function Post({
             >
               <DisplayAvatar
                 avatar={avatar as string | Record<string, unknown> | undefined}
-                username={username ?? undefined}
+                /* Seed the default avatar with the same value the profile/chat
+                   use (display name, falling back to username) so an unset
+                   avatar looks identical across the post, profile and messages. */
+                username={name || username || undefined}
                 size={48}
               />
             </button>

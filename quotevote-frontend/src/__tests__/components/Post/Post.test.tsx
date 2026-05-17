@@ -57,7 +57,9 @@ jest.mock('@/components/VotingComponents/VotingPopup', () => ({
   default: () => null,
 }))
 jest.mock('@/components/DisplayAvatar', () => ({
-  DisplayAvatar: () => <div data-testid="avatar" />,
+  DisplayAvatar: ({ username }: { username?: string }) => (
+    <div data-testid="avatar" data-seed={username ?? ''} />
+  ),
 }))
 jest.mock('../../../components/CustomButtons/FollowButton', () => ({
   FollowButton: () => <button type="button">Follow</button>,
@@ -134,6 +136,19 @@ describe('Post Component', () => {
         <Post {...mockProps} post={postWithoutCreator} />
       )
       expect(getByRole('toolbar', { name: 'Post actions' })).toBeInTheDocument()
+    })
+  })
+
+  describe('Default avatar seed', () => {
+    it('seeds the default avatar with the display name (matches profile/chat)', () => {
+      const { getByTestId } = render(<Post {...mockProps} />)
+      expect(getByTestId('avatar')).toHaveAttribute('data-seed', 'Test User')
+    })
+
+    it('falls back to the username when the creator has no name', () => {
+      const post = { ...mockPost, creator: { ...mockPost.creator, name: undefined } }
+      const { getByTestId } = render(<Post {...mockProps} post={post} />)
+      expect(getByTestId('avatar')).toHaveAttribute('data-seed', 'testuser')
     })
   })
 

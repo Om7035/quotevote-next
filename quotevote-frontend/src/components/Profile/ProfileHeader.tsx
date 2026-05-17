@@ -205,7 +205,10 @@ export function ProfileHeader({ profileUser }: ProfileHeaderProps) {
           <div className="ring-4 ring-card rounded-full">
             <DisplayAvatar
               avatar={avatar as string | Record<string, unknown> | undefined}
-              username={username}
+              /* Seed the default avatar with the same value the chat/message
+                 header uses (the room title = the user's display name), so an
+                 unset avatar looks identical in the profile and in messages. */
+              username={name || username}
               size={96}
             />
           </div>
