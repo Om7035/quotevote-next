@@ -30,7 +30,11 @@ import {
 import { ProfileBadge, ProfileBadgeContainer } from './ProfileBadge';
 import { cn } from '@/lib/utils';
 import { useProfileBackground } from '@/hooks/useProfileBackground';
-import { getProfileBackgroundStyle } from '@/lib/utils/profileBackground';
+import {
+  getProfileBackgroundStyle,
+  DEFAULT_PROFILE_BG_COLOR,
+  DEFAULT_PROFILE_BG_PATTERN,
+} from '@/lib/utils/profileBackground';
 
 interface ProfileHeaderProps {
   profileUser: ProfileUser;
@@ -182,20 +186,21 @@ export function ProfileHeader({ profileUser }: ProfileHeaderProps) {
 
   return (
     <div className="bg-card rounded-xl overflow-hidden border border-border shadow-sm">
-      {/* Cover banner — customizable color + pattern on your own profile */}
+      {/* Cover banner — customizable color + pattern on your own profile;
+          other users default to the brand green zigzag. */}
       <div className="h-28 relative overflow-hidden z-0">
-        {sameUser ? (
-          <div
-            className="absolute inset-0"
-            style={getProfileBackgroundStyle(profileBgColor, profileBgPattern)}
-            data-testid="profile-cover"
-          />
-        ) : (
-          <>
-            <div className="absolute inset-0 bg-gradient-to-r from-primary/80 via-primary/60 to-primary/40 animate-gradient-x" />
-            <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, currentColor 1px, transparent 0)', backgroundSize: '20px 20px' }} />
-          </>
-        )}
+        <div
+          className="absolute inset-0"
+          style={
+            sameUser
+              ? getProfileBackgroundStyle(profileBgColor, profileBgPattern)
+              : getProfileBackgroundStyle(
+                  DEFAULT_PROFILE_BG_COLOR,
+                  DEFAULT_PROFILE_BG_PATTERN
+                )
+          }
+          data-testid="profile-cover"
+        />
       </div>
 
       {/* Profile info section */}
