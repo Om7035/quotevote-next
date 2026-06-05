@@ -82,9 +82,18 @@ function ChatPanel() {
   // chat remains reachable.
   if (routeHasPersistentChatPanel(pathname) && isXlUp) return null;
 
+  // `modal={false}` keeps the mobile bottom nav interactive while the chat is
+  // open (a modal Radix dialog sets `pointer-events: none` on everything
+  // outside it). The sheet/overlay are also held above the 56px bottom nav on
+  // mobile so the nav stays visible; on md+ (no bottom nav) the sheet is full
+  // height.
   return (
-    <Sheet open={chatOpen} onOpenChange={setChatOpen}>
-      <SheetContent side="right" className="w-full sm:w-[400px] p-0">
+    <Sheet open={chatOpen} onOpenChange={setChatOpen} modal={false}>
+      <SheetContent
+        side="right"
+        overlayClassName="bottom-[56px] md:bottom-0"
+        className="w-full sm:w-[400px] p-0 bottom-[56px] h-[calc(100%-56px)] md:inset-y-0 md:h-full"
+      >
         <div className="h-full"><ChatContent /></div>
       </SheetContent>
     </Sheet>
@@ -382,7 +391,7 @@ export default function DashboardLayout({
           MOBILE BOTTOM NAV
       ════════════════════════════════════════════════════════════════ */}
       <nav
-        className="fixed bottom-0 left-0 right-0 z-50 md:hidden h-[56px] bg-card border-t border-border flex items-center"
+        className="fixed bottom-0 left-0 right-0 z-[60] md:hidden h-[56px] bg-card border-t border-border flex items-center"
         aria-label="Mobile navigation"
       >
         {/* Home */}
