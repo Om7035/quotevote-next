@@ -329,7 +329,7 @@ export default function DashboardLayout({
             />
             <span className="text-[18px] font-extrabold tracking-tight text-[#52b274]">Quote.Vote</span>
           </Link>
-          {/* Messages live in the mobile bottom nav — no duplicate here. */}
+          {/* Account menu lives on the bottom-nav Profile button. */}
         </div>
       </header>
 
@@ -409,30 +409,66 @@ export default function DashboardLayout({
           <span className="text-[10px] font-semibold">Activity</span>
         </Link>
 
-        {/* Profile */}
-        <Link
-          href="/dashboard/profile"
-          className={cn(
-            'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors duration-150',
-            isActive('/dashboard/profile') ? 'text-[#52b274]' : 'text-muted-foreground'
-          )}
-          aria-label="Profile"
-        >
-          {loggedIn ? (
-            <DisplayAvatar
-              avatar={user?.avatar as string | Record<string, unknown> | undefined}
-              username={avatarSeed}
-              size={24}
-              className={cn(
-                'size-6 transition-all',
-                isActive('/dashboard/profile') ? 'ring-2 ring-[#52b274] ring-offset-1' : 'ring-1 ring-border'
+        {/* Profile — opens an account menu (Your Profile, Settings & Privacy,
+            Sign out) instead of navigating directly. */}
+        {loggedIn ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors duration-150 border-0 bg-transparent cursor-pointer',
+                  isActive('/dashboard/profile') ? 'text-[#52b274]' : 'text-muted-foreground'
+                )}
+                aria-label="Account menu"
+              >
+                <DisplayAvatar
+                  avatar={user?.avatar as string | Record<string, unknown> | undefined}
+                  username={avatarSeed}
+                  size={24}
+                  className={cn(
+                    'size-6 transition-all',
+                    isActive('/dashboard/profile') ? 'ring-2 ring-[#52b274] ring-offset-1' : 'ring-1 ring-border'
+                  )}
+                />
+                <span className="text-[10px] font-semibold">Profile</span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="end" sideOffset={8} className="w-56 mb-1">
+              <DropdownMenuItem onClick={() => router.push('/dashboard/profile')} className="cursor-pointer gap-2.5 py-2.5">
+                <User className="size-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Your Profile</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => router.push('/dashboard/settings')} className="cursor-pointer gap-2.5 py-2.5">
+                <Settings2 className="size-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Settings &amp; Privacy</span>
+              </DropdownMenuItem>
+              {isAdmin && (
+                <DropdownMenuItem onClick={() => router.push('/dashboard/control-panel')} className="cursor-pointer gap-2.5 py-2.5">
+                  <ShieldCheck className="size-4 text-[#52b274]" />
+                  <span className="text-sm font-medium text-[#52b274]">Admin Panel</span>
+                </DropdownMenuItem>
               )}
-            />
-          ) : (
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleLogout} className="cursor-pointer gap-2.5 py-2.5 focus:bg-destructive/10">
+                <LogOut className="size-4 text-red-500" />
+                <span className="text-sm font-medium text-red-500">Sign out</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <Link
+            href="/dashboard/profile"
+            className={cn(
+              'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors duration-150',
+              isActive('/dashboard/profile') ? 'text-[#52b274]' : 'text-muted-foreground'
+            )}
+            aria-label="Profile"
+          >
             <User className="size-[22px]" />
-          )}
-          <span className="text-[10px] font-semibold">Profile</span>
-        </Link>
+            <span className="text-[10px] font-semibold">Profile</span>
+          </Link>
+        )}
       </nav>
 
       {/* ════════════════════════════════════════════════════════════════
