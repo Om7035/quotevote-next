@@ -475,7 +475,9 @@ export default function DashboardLayout({
       <RequestInviteDialog open={isModalOpen} onClose={closeAuthModal} />
 
       <Dialog open={submitDialogOpen} onOpenChange={setSubmitDialogOpen}>
-        <DialogContent className="max-w-md p-0" showCloseButton={false}>
+        {/* z-[70] keeps the full-screen create form above the mobile bottom
+            nav (z-[60]) so the POST button isn't hidden behind it. */}
+        <DialogContent className="max-w-md p-0 z-[70]" showCloseButton={false}>
           <DialogTitle className="sr-only">Create Quote</DialogTitle>
           <SubmitPost setOpen={setSubmitDialogOpen} />
         </DialogContent>

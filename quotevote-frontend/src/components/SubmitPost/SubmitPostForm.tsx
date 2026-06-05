@@ -178,7 +178,7 @@ export function SubmitPostForm({ options = [], user, setOpen }: SubmitPostFormPr
         <Card
           className={cn(
             'flex flex-col w-full',
-            isMobile ? 'h-screen max-h-screen' : 'max-h-[calc(100vh-200px)]'
+            isMobile ? 'h-dvh max-h-dvh' : 'max-h-[calc(100vh-200px)]'
           )}
         >
           <CardHeader
