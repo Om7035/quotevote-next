@@ -82,58 +82,21 @@ function ChatPanel() {
   // chat remains reachable.
   if (routeHasPersistentChatPanel(pathname) && isXlUp) return null;
 
+  // `modal={false}` keeps the mobile bottom nav interactive while the chat is
+  // open (a modal Radix dialog sets `pointer-events: none` on everything
+  // outside it). The sheet/overlay are also held above the 56px bottom nav on
+  // mobile so the nav stays visible; on md+ (no bottom nav) the sheet is full
+  // height.
   return (
-    <Sheet open={chatOpen} onOpenChange={setChatOpen}>
-      <SheetContent side="right" className="w-full sm:w-[400px] p-0">
+    <Sheet open={chatOpen} onOpenChange={setChatOpen} modal={false}>
+      <SheetContent
+        side="right"
+        overlayClassName="bottom-[56px] md:bottom-0"
+        className="w-full sm:w-[400px] p-0 bottom-[56px] h-[calc(100%-56px)] md:inset-y-0 md:h-full"
+      >
         <div className="h-full"><ChatContent /></div>
       </SheetContent>
     </Sheet>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Icon button with badge                                             */
-/* ------------------------------------------------------------------ */
-
-function IconBtn({
-  label,
-  badge,
-  badgeColor = 'red',
-  active,
-  onClick,
-  children,
-}: {
-  label: string;
-  badge?: number;
-  badgeColor?: 'red' | 'green';
-  active?: boolean;
-  onClick?: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      onClick={onClick}
-      className={cn(
-        'relative flex items-center justify-center w-10 h-10 rounded-full transition-all duration-150 cursor-pointer border-0',
-        active
-          ? 'bg-[#e8f5ee] text-[#52b274]'
-          : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
-      )}
-    >
-      {children}
-      {!!badge && badge > 0 && (
-        <span
-          className={cn(
-            'absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full text-white text-[9px] font-bold leading-none shadow ring-2 ring-background',
-            badgeColor === 'green' ? 'bg-[#52b274]' : 'bg-red-500'
-          )}
-        >
-          {badge > 99 ? '99+' : badge}
-        </span>
-      )}
-    </button>
   );
 }
 
@@ -206,7 +169,10 @@ export default function DashboardLayout({
   };
 
   return (
-    <div className="min-h-screen bg-background">
+    // Mobile = fixed app shell: the viewport itself never scrolls, so the
+    // fixed top bar and bottom nav are always visible and only <main> scrolls.
+    // Desktop (md+) keeps normal page (body) scrolling.
+    <div className="bg-background h-[100dvh] overflow-hidden md:h-auto md:min-h-screen md:overflow-visible">
       <a
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[100] focus:px-4 focus:py-2 focus:bg-[#52b274] focus:text-white focus:rounded-md focus:text-sm focus:font-medium focus:shadow-lg"
@@ -363,18 +329,7 @@ export default function DashboardLayout({
             />
             <span className="text-[18px] font-extrabold tracking-tight text-[#52b274]">Quote.Vote</span>
           </Link>
-
-          <div className="flex items-center gap-1.5">
-            <IconBtn
-              label="Messages"
-              badge={unreadChat}
-              badgeColor="green"
-              active={chatOpen}
-              onClick={() => setChatOpen(!chatOpen)}
-            >
-              <MessageSquare className="size-5" fill={chatOpen ? 'currentColor' : 'none'} />
-            </IconBtn>
-          </div>
+          {/* Account menu lives on the bottom-nav Profile button. */}
         </div>
       </header>
 
@@ -382,7 +337,7 @@ export default function DashboardLayout({
           MOBILE BOTTOM NAV
       ════════════════════════════════════════════════════════════════ */}
       <nav
-        className="fixed bottom-0 left-0 right-0 z-50 md:hidden h-[56px] bg-card border-t border-border flex items-center"
+        className="fixed bottom-0 left-0 right-0 z-[60] md:hidden h-[56px] bg-card border-t border-border flex items-center"
         aria-label="Mobile navigation"
       >
         {/* Home */}
@@ -454,36 +409,75 @@ export default function DashboardLayout({
           <span className="text-[10px] font-semibold">Activity</span>
         </Link>
 
-        {/* Profile */}
-        <Link
-          href="/dashboard/profile"
-          className={cn(
-            'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors duration-150',
-            isActive('/dashboard/profile') ? 'text-[#52b274]' : 'text-muted-foreground'
-          )}
-          aria-label="Profile"
-        >
-          {loggedIn ? (
-            <DisplayAvatar
-              avatar={user?.avatar as string | Record<string, unknown> | undefined}
-              username={avatarSeed}
-              size={24}
-              className={cn(
-                'size-6 transition-all',
-                isActive('/dashboard/profile') ? 'ring-2 ring-[#52b274] ring-offset-1' : 'ring-1 ring-border'
+        {/* Profile — opens an account menu (Your Profile, Settings & Privacy,
+            Sign out) instead of navigating directly. */}
+        {loggedIn ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors duration-150 border-0 bg-transparent cursor-pointer',
+                  isActive('/dashboard/profile') ? 'text-[#52b274]' : 'text-muted-foreground'
+                )}
+                aria-label="Account menu"
+              >
+                <DisplayAvatar
+                  avatar={user?.avatar as string | Record<string, unknown> | undefined}
+                  username={avatarSeed}
+                  size={24}
+                  className={cn(
+                    'size-6 transition-all',
+                    isActive('/dashboard/profile') ? 'ring-2 ring-[#52b274] ring-offset-1' : 'ring-1 ring-border'
+                  )}
+                />
+                <span className="text-[10px] font-semibold">Profile</span>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="end" sideOffset={8} className="w-56 mb-1">
+              <DropdownMenuItem onClick={() => router.push('/dashboard/profile')} className="cursor-pointer gap-2.5 py-2.5">
+                <User className="size-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Your Profile</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => router.push('/dashboard/settings')} className="cursor-pointer gap-2.5 py-2.5">
+                <Settings2 className="size-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Settings &amp; Privacy</span>
+              </DropdownMenuItem>
+              {isAdmin && (
+                <DropdownMenuItem onClick={() => router.push('/dashboard/control-panel')} className="cursor-pointer gap-2.5 py-2.5">
+                  <ShieldCheck className="size-4 text-[#52b274]" />
+                  <span className="text-sm font-medium text-[#52b274]">Admin Panel</span>
+                </DropdownMenuItem>
               )}
-            />
-          ) : (
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleLogout} className="cursor-pointer gap-2.5 py-2.5 focus:bg-destructive/10">
+                <LogOut className="size-4 text-red-500" />
+                <span className="text-sm font-medium text-red-500">Sign out</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : (
+          <Link
+            href="/dashboard/profile"
+            className={cn(
+              'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors duration-150',
+              isActive('/dashboard/profile') ? 'text-[#52b274]' : 'text-muted-foreground'
+            )}
+            aria-label="Profile"
+          >
             <User className="size-[22px]" />
-          )}
-          <span className="text-[10px] font-semibold">Profile</span>
-        </Link>
+            <span className="text-[10px] font-semibold">Profile</span>
+          </Link>
+        )}
       </nav>
 
       {/* ════════════════════════════════════════════════════════════════
           MAIN CONTENT
       ════════════════════════════════════════════════════════════════ */}
-      <main id="main-content" className="min-h-screen pt-[56px] md:pt-[60px] pb-[60px] md:pb-0">
+      <main
+        id="main-content"
+        className="h-full overflow-y-auto overscroll-contain pt-[56px] md:pt-[60px] pb-[60px] md:pb-0 md:h-auto md:min-h-screen md:overflow-visible"
+      >
         {pathname.startsWith('/dashboard/profile') || pathname.startsWith('/dashboard/settings') ? (
           /* Profile and Settings & Privacy align with the Home feed column:
              apply the same fixed left-sidebar / right-chat offsets as
@@ -505,7 +499,7 @@ export default function DashboardLayout({
           </div>
         ) : (
           <div
-            className={cn('mx-auto px-0 md:px-4', pathname.startsWith('/dashboard/post/') && 'md:px-8 lg:px-12')}
+            className={cn('mx-auto px-0 md:px-4', pathname.startsWith('/dashboard/post/') && 'md:px-8 lg:px-12 h-full md:h-auto')}
             style={{
               maxWidth: pathname.startsWith('/dashboard/explore') || pathname.startsWith('/dashboard/control-panel')
                 ? 'none'
@@ -523,7 +517,9 @@ export default function DashboardLayout({
       <RequestInviteDialog open={isModalOpen} onClose={closeAuthModal} />
 
       <Dialog open={submitDialogOpen} onOpenChange={setSubmitDialogOpen}>
-        <DialogContent className="max-w-md p-0" showCloseButton={false}>
+        {/* z-[70] keeps the full-screen create form above the mobile bottom
+            nav (z-[60]) so the POST button isn't hidden behind it. */}
+        <DialogContent className="max-w-md p-0 z-[70]" showCloseButton={false}>
           <DialogTitle className="sr-only">Create Quote</DialogTitle>
           <SubmitPost setOpen={setSubmitDialogOpen} />
         </DialogContent>
