@@ -30,6 +30,7 @@ interface HeaderProps {
 function Header({ room }: HeaderProps) {
   const currentUser = useAppStore((state) => state.user.data)
   const setSelectedChatRoom = useAppStore((state) => state.setSelectedChatRoom)
+  const setChatOpen = useAppStore((state) => state.setChatOpen)
 
   const { blockBuddy, unblockBuddy, removeBuddy } = useRosterManagement()
   const { refetch: refetchChatRooms } = useQuery<{ messageRooms: ChatRoom[] }>(
@@ -118,6 +119,7 @@ function Header({ room }: HeaderProps) {
 
   const handleDeleteChat = () => {
     setSelectedChatRoom(null)
+    setChatOpen(false)
     toast('Chat closed')
   }
 

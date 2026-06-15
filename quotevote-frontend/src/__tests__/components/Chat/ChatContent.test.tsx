@@ -118,6 +118,7 @@ jest.mock('@/components/Chat/StatusEditor', () => ({
 }))
 
 const mockUseAppStore = useAppStore as jest.MockedFunction<typeof useAppStore>
+const mockSetChatOpen = jest.fn()
 
 describe('ChatContent', () => {
   beforeEach(() => {
@@ -147,6 +148,7 @@ describe('ChatContent', () => {
           userStatus: 'online',
           userStatusMessage: '',
         },
+        setChatOpen: mockSetChatOpen,
       }
       return selector(state as ReturnType<typeof useAppStore>)
     })
@@ -267,6 +269,17 @@ describe('ChatContent', () => {
     // Status should be displayed (UserStatusDisplay shows the status message or label)
     // The status message is displayed in the UserStatusDisplay component
     expect(screen.getByText('Away message')).toBeInTheDocument()
+  })
+
+  it('renders close chat button and calls setChatOpen(false) when clicked', () => {
+    render(<ChatContent />)
+
+    const closeButton = screen.getByRole('button', { name: /close chat/i })
+    expect(closeButton).toBeInTheDocument()
+
+    fireEvent.click(closeButton)
+
+    expect(mockSetChatOpen).toHaveBeenCalledWith(false)
   })
 
   it('handles empty buddy list', () => {
