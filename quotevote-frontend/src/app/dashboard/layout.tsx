@@ -16,6 +16,7 @@ import {
   ShieldCheck,
   LogOut,
   ChevronDown,
+  Settings,
 } from 'lucide-react';
 
 
@@ -114,7 +115,6 @@ export default function DashboardLayout({
   const { isModalOpen, closeAuthModal } = useAuthModal();
   const setSelectedPage = useAppStore((s) => s.setSelectedPage);
   const setChatOpen = useAppStore((s) => s.setChatOpen);
-  const chatOpen = useAppStore((s) => s.chat.open);
   const user = useAppStore((s) => s.user.data);
   const logout = useAppStore((s) => s.logout);
 
@@ -353,26 +353,18 @@ export default function DashboardLayout({
           <span className="text-[10px] font-semibold">Home</span>
         </Link>
 
-        {/* Messages */}
-        <button
-          type="button"
-          onClick={() => setChatOpen(!chatOpen)}
+        {/* Settings */}
+        <Link
+          href="/dashboard/settings"
           className={cn(
-            'relative flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors duration-150 border-0 bg-transparent cursor-pointer',
-            chatOpen ? 'text-[#52b274]' : 'text-muted-foreground'
+            'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors duration-150',
+            isActive('/dashboard/settings') ? 'text-[#52b274]' : 'text-muted-foreground'
           )}
-          aria-label="Messages"
+          aria-label="Settings"
         >
-          <div className="relative">
-            <MessageSquare className="size-[22px]" fill={chatOpen ? 'currentColor' : 'none'} />
-            {unreadChat > 0 && (
-              <span className="absolute -top-1 -right-2 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-[#52b274] text-white text-[8px] font-bold leading-none shadow ring-1 ring-card">
-                {unreadChat > 9 ? '9+' : unreadChat}
-              </span>
-            )}
-          </div>
-          <span className="text-[10px] font-semibold">Messages</span>
-        </button>
+          <Settings className="size-[22px]" />
+          <span className="text-[10px] font-semibold">Settings</span>
+        </Link>
 
         {/* Create — floating green circle */}
         <button
@@ -422,15 +414,22 @@ export default function DashboardLayout({
                 )}
                 aria-label="Account menu"
               >
-                <DisplayAvatar
-                  avatar={user?.avatar as string | Record<string, unknown> | undefined}
-                  username={avatarSeed}
-                  size={24}
-                  className={cn(
-                    'size-6 transition-all',
-                    isActive('/dashboard/profile') ? 'ring-2 ring-[#52b274] ring-offset-1' : 'ring-1 ring-border'
+                <div className="relative">
+                  <DisplayAvatar
+                    avatar={user?.avatar as string | Record<string, unknown> | undefined}
+                    username={avatarSeed}
+                    size={24}
+                    className={cn(
+                      'size-6 transition-all',
+                      isActive('/dashboard/profile') ? 'ring-2 ring-[#52b274] ring-offset-1' : 'ring-1 ring-border'
+                    )}
+                  />
+                  {unreadChat > 0 && (
+                    <span className="absolute -top-0.5 -right-1 flex items-center justify-center min-w-[12px] h-[12px] px-0.5 rounded-full bg-[#52b274] text-white text-[7px] font-bold leading-none shadow ring-1 ring-card">
+                      {unreadChat > 9 ? '9+' : unreadChat}
+                    </span>
                   )}
-                />
+                </div>
                 <span className="text-[10px] font-semibold">Profile</span>
               </button>
             </DropdownMenuTrigger>
@@ -438,6 +437,17 @@ export default function DashboardLayout({
               <DropdownMenuItem onClick={() => router.push('/dashboard/profile')} className="cursor-pointer gap-2.5 py-2.5">
                 <User className="size-4 text-muted-foreground" />
                 <span className="text-sm font-medium">Your Profile</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setChatOpen(true)} className="cursor-pointer gap-2.5 py-2.5">
+                <div className="relative">
+                  <MessageSquare className="size-4 text-muted-foreground" />
+                  {unreadChat > 0 && (
+                    <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[12px] h-[12px] rounded-full bg-[#52b274] text-white text-[7px] font-bold leading-none">
+                      {unreadChat > 9 ? '9+' : unreadChat}
+                    </span>
+                  )}
+                </div>
+                <span className="text-sm font-medium">Messages</span>
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => router.push('/dashboard/settings')} className="cursor-pointer gap-2.5 py-2.5">
                 <Settings2 className="size-4 text-muted-foreground" />
