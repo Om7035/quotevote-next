@@ -30,9 +30,8 @@ export function MobileDrawer({
     <Sheet open={open} onOpenChange={onClose}>
       <SheetContent
         side={anchor}
-        className="w-full max-w-[400px] sm:w-[400px] p-0 flex flex-col"
+        className="w-full max-w-[400px] sm:w-[400px] p-0 flex flex-col pb-[env(safe-area-inset-bottom,0px)]"
         onInteractOutside={(e) => e.preventDefault()}
-        onEscapeKeyDown={(e) => e.preventDefault()}
       >
         {showHeader && (
           <SheetHeader className="px-4 py-3 border-b border-[var(--color-gray-light)]">
