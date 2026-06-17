@@ -300,7 +300,7 @@ describe('LandingPage', () => {
       expect(resultBtn).not.toBeNull();
       await user.click(resultBtn!);
 
-      expect(mockPush).toHaveBeenCalledWith('/auths/login');
+      expect(mockPush).toHaveBeenCalledWith('/dashboard/explore?q=Democracy%20Matters');
     });
 
     it('does not show dropdown when query is empty', () => {
