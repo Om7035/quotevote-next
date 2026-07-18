@@ -1,5 +1,12 @@
 import { GraphQLInputObjectType, GraphQLString, GraphQLNonNull } from 'graphql';
 
+export interface CardPaymentMethodInputType {
+  number: string;
+  exp_month: string;
+  exp_year: string;
+  cvc: string;
+}
+
 export const CardPaymentMethodInput = new GraphQLInputObjectType({
   name: 'CardPaymentMethodInput',
   fields: {

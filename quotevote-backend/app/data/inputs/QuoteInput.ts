@@ -1,5 +1,14 @@
 import { GraphQLInputObjectType, GraphQLString, GraphQLNonNull, GraphQLInt } from 'graphql';
 
+export interface QuoteInputType {
+  postId: string;
+  quoter: string;
+  quoted: string;
+  quote: string;
+  startWordIndex: number;
+  endWordIndex: number;
+}
+
 export const QuoteInput = new GraphQLInputObjectType({
   name: 'QuoteInput',
   fields: {

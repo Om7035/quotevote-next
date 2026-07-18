@@ -1,5 +1,16 @@
 import { GraphQLInputObjectType, GraphQLString, GraphQLNonNull, GraphQLInt } from 'graphql';
 
+export interface CommentInputType {
+  postId: string;
+  userId: string;
+  content: string;
+  startWordIndex: number;
+  endWordIndex: number;
+  quote?: string | null;
+  url?: string | null;
+  reaction?: string | null;
+}
+
 export const CommentInput = new GraphQLInputObjectType({
   name: 'CommentInput',
   fields: {
