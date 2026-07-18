@@ -1,5 +1,17 @@
 import { GraphQLInputObjectType, GraphQLString, GraphQLNonNull, GraphQLList, GraphQLBoolean } from 'graphql';
 
+export interface UserInputType {
+  _id: string;
+  name?: string | null;
+  username?: string | null;
+  email?: string | null;
+  password?: string | null;
+  quotes?: string[] | null;
+  avatar?: string | null;
+  contributorBadge?: boolean | null;
+  themePreference?: string | null;
+}
+
 export const UserInput = new GraphQLInputObjectType({
   name: 'UserInput',
   fields: {

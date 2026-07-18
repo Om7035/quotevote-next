@@ -1,5 +1,12 @@
 import { GraphQLInputObjectType, GraphQLString, GraphQLNonNull } from 'graphql';
-import { CardPaymentMethodInput } from './CardPaymentMethodInput';
+import { CardPaymentMethodInput, type CardPaymentMethodInputType } from './CardPaymentMethodInput';
+
+export interface StripeCustomerInputType {
+  first_name: string;
+  last_name?: string | null;
+  email: string;
+  card: CardPaymentMethodInputType;
+}
 
 export const StripeCustomerInput = new GraphQLInputObjectType({
   name: 'StripeCustomerInput',

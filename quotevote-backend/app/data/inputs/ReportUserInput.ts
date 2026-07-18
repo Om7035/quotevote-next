@@ -1,5 +1,12 @@
 import { GraphQLInputObjectType, GraphQLString, GraphQLNonNull } from 'graphql';
 
+export interface ReportUserInputType {
+  _reportedUserId: string;
+  reason: string;
+  description?: string | null;
+  severity?: string | null;
+}
+
 export const ReportUserInput = new GraphQLInputObjectType({
   name: 'ReportUserInput',
   fields: {
@@ -9,6 +16,10 @@ export const ReportUserInput = new GraphQLInputObjectType({
     severity: { type: GraphQLString },
   },
 });
+
+export interface SendUserInviteInputType {
+  email: string;
+}
 
 export const SendUserInviteInput = new GraphQLInputObjectType({
   name: 'SendUserInviteInput',

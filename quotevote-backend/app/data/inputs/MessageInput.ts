@@ -1,5 +1,13 @@
 import { GraphQLInputObjectType, GraphQLString, GraphQLNonNull } from 'graphql';
 
+export interface MessageInputType {
+  messageRoomId?: string | null;
+  componentId?: string | null;
+  title: string;
+  text: string;
+  type?: string | null;
+}
+
 export const MessageInput = new GraphQLInputObjectType({
   name: 'MessageInput',
   fields: {
