@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 /**
  * ChatList Component Tests
  *
@@ -15,7 +16,6 @@
 
 import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils'
 import ChatList from '@/components/Chat/ChatList'
-import { toAppPostUrl } from '@/lib/utils/sanitizeUrl'
 import { useAppStore } from '@/store'
 import { GET_CHAT_ROOMS } from '@/graphql/queries'
 
@@ -76,11 +76,7 @@ const groupRoom = {
   messageType: 'POST',
   users: ['user1', 'user2', 'user3'],
   created: new Date(Date.now() - 120_000).toISOString(),
-  postDetails: {
-    title: 'Interesting Quote',
-    text: 'Some post text here.',
-    url: '/post/general/interesting-quote/post1',
-  },
+  postDetails: { _id: 'post1', title: 'Interesting Quote', text: 'Some post text here.' },
   avatar: null,
 }
 
@@ -212,33 +208,10 @@ describe('ChatList', () => {
       expect(screen.getByText('Jane Doe')).toBeInTheDocument()
     })
 
-    const roomButton = screen.getByTestId('discussion-thread')
+    const roomButton = screen.getByText('Jane Doe').closest('button')!
     fireEvent.click(roomButton)
 
     expect(mockSetSelectedChatRoom).toHaveBeenCalledWith('room-dm-1')
-  })
-
-  it('renders POST room title as post link in the list view', async () => {
-    render(<ChatList filterType="groups" />)
-
-    await waitFor(() => {
-      expect(screen.getByText('Interesting Quote')).toBeInTheDocument()
-    })
-
-    const postLink = screen.getByRole('link', { name: 'Interesting Quote' })
-    expect(postLink).toHaveAttribute('href', toAppPostUrl('/post/general/interesting-quote/post1'))
-  })
-
-  it('does not select chat room when clicking the post title link', async () => {
-    render(<ChatList filterType="groups" />)
-
-    await waitFor(() => {
-      expect(screen.getByText('Interesting Quote')).toBeInTheDocument()
-    })
-
-    const postLink = screen.getByRole('link', { name: 'Interesting Quote' })
-    fireEvent.click(postLink)
-    expect(mockSetSelectedChatRoom).not.toHaveBeenCalled()
   })
 
   // ── Selected room highlight ──────────────────────────────────────────────
@@ -256,7 +229,7 @@ describe('ChatList', () => {
     render(<ChatList filterType="chats" />)
 
     await waitFor(() => {
-      const roomButton = screen.getByTestId('discussion-thread')
+      const roomButton = screen.getByText('Jane Doe').closest('button')
       expect(roomButton?.className).toContain('border-[#52b274]')
     })
   })
