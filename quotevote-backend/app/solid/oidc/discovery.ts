@@ -1,3 +1,4 @@
+import { assertPublicUrl } from './security';
 /**
  * Solid OIDC Issuer Discovery
  * Implements OpenID Connect Discovery for Solid Pods
@@ -40,6 +41,7 @@ export async function discoverIssuer(issuerOrWebId: string): Promise<IssuerMetad
     const wellKnownUrl = `${issuerUrl}/.well-known/openid-configuration`;
 
     try {
+        await assertPublicUrl(wellKnownUrl);
         const response = await fetch(wellKnownUrl, {
             headers: {
                 'Accept': 'application/json',
@@ -60,6 +62,10 @@ export async function discoverIssuer(issuerOrWebId: string): Promise<IssuerMetad
             throw new Error('Invalid issuer metadata: missing required fields');
         }
 
+        // Endpoints come from a user-chosen issuer: never let them point at internal hosts.
+        await assertPublicUrl(metadata.token_endpoint);
+        await assertPublicUrl(metadata.authorization_endpoint);
+
         return metadata;
     } catch (error) {
         if (error instanceof Error) {
@@ -76,6 +82,7 @@ export async function discoverIssuer(issuerOrWebId: string): Promise<IssuerMetad
  */
 async function discoverIssuerFromWebId(webId: string): Promise<string> {
     try {
+        await assertPublicUrl(webId);
         const response = await fetch(webId, {
             headers: {
                 'Accept': 'application/ld+json, application/json, text/turtle',

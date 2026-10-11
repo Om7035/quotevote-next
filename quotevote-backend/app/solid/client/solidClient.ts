@@ -1,3 +1,4 @@
+import { assertPublicUrl } from '../oidc/security';
 import type { PrismaClient, SolidConnection as SolidConnectionRecord } from '@prisma/client';
 import { refreshAccessToken, type TokenResponse } from '../oidc/authorization';
 import { encryptTokens, decryptTokens } from '../storage/encryption';
@@ -60,6 +61,7 @@ export class SolidClient {
     async fetch(url: string, options: SolidFetchOptions = {}): Promise<Response> {
         const { timeout = 10000, ...fetchOptions } = options;
 
+        await assertPublicUrl(url);
         await this.ensureValidToken();
         const response = await this.send(url, fetchOptions, timeout);
 

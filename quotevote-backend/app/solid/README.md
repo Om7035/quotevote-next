@@ -170,8 +170,8 @@ mutation Disconnect { solidDisconnect }
 
 ## Limitations
 
-### ID token signature is not verified
-`parseIdToken` decodes the ID token without checking its signature. Verifying it requires the issuer's JWKS (`jwks_uri` from discovery), key selection by `kid`, and an RSA/EC verification step. No JWT library is a direct dependency here, so this is not done. The token is only read from the back-channel response of the token endpoint, over TLS, immediately after the code exchange. Do not treat the claims as trustworthy beyond binding the connection to a WebID. Follow-up: add JWKS verification (for example with `jose`) before relying on `iss`/`aud` claims.
+### ID token verification and SSRF guard
+The ID token is verified before connecting (`verifyIdToken` in `oidc/security.ts`): RS256/ES256 signature against the issuer's JWKS, plus `iss`, `aud` (client id) and `exp`. Outbound requests to issuer endpoints, JWKS and Pod URLs are checked with `assertPublicUrl`, which rejects non-https URLs and hosts that are or resolve to private, loopback or link-local addresses (loopback is allowed outside production). Residual risk: DNS rebinding between the check and the fetch.
 
 ### Provider client registration
 Solid-OIDC providers generally require the Client ID to be a **dereferenceable Client ID document** (a URL that describes the client and its redirect URIs). That document is not part of this codebase. It must be hosted and registered before real providers accept `SOLID_CLIENT_ID`.
@@ -212,7 +212,7 @@ The provider rejected the refresh token. The user must reconnect.
 
 ## Future Enhancements
 
-- [ ] Verify ID token signatures against the issuer JWKS
+- [x] Verify ID token signatures against the issuer JWKS
 - [ ] Align the live GraphQL SDL with the portable contract
 - [ ] Multiple Pod providers
 - [ ] Automatic conflict resolution strategies

@@ -5,9 +5,9 @@ import { logger } from '~/data/utils/logger';
 import {
     exchangeCodeForTokens,
     generateAuthorizationUrl,
-    parseIdToken,
 } from '~/solid/oidc/authorization';
-import { validateIssuerUrl } from '~/solid/oidc/discovery';
+import { discoverIssuer, validateIssuerUrl } from '~/solid/oidc/discovery';
+import { verifyIdToken } from '~/solid/oidc/security';
 import { encryptTokens, decryptTokens } from '~/solid/storage/encryption';
 import {
     pullPortableState,
@@ -253,8 +253,18 @@ export const solidResolvers = {
                     throw new SolidOidcError('invalid_response', 'Token response has no id_token');
                 }
 
-                // NOTE: signature is not verified (no JWKS verification available). See README "Limitations".
-                const claims = parseIdToken(tokens.id_token);
+                // Verify signature (issuer JWKS), issuer, audience and expiry before trusting any claim.
+                const metadata = await discoverIssuer(authState.issuer);
+                let claims: Record<string, unknown>;
+                try {
+                    claims = await verifyIdToken(tokens.id_token, {
+                        issuer: authState.issuer,
+                        clientId: getClientId(),
+                        jwksUri: metadata.jwks_uri,
+                    });
+                } catch {
+                    throw new SolidOidcError('invalid_response', 'ID token verification failed');
+                }
                 const candidate =
                     typeof claims.webid === 'string' && claims.webid
                         ? claims.webid

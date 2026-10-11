@@ -25,6 +25,18 @@ jest.mock('~/solid/oidc/authorization', () => ({
     exchangeCodeForTokens: jest.fn(),
 }));
 
+jest.mock('~/solid/oidc/discovery', () => ({
+    ...jest.requireActual('~/solid/oidc/discovery'),
+    discoverIssuer: jest.fn().mockResolvedValue({ jwks_uri: 'https://issuer.example/jwks' }),
+}));
+
+jest.mock('~/solid/oidc/security', () => ({
+    // Signature verification is covered in security.test.ts; here only decode the claims.
+    verifyIdToken: jest.fn(async (token: string) =>
+        JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'))
+    ),
+}));
+
 jest.mock('~/solid/sync/syncService', () => ({
     pullPortableState: jest.fn(),
     pushPortableState: jest.fn(),
