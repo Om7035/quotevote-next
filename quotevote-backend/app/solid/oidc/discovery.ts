@@ -152,9 +152,21 @@ function extractIssuerFromJsonLd(data: unknown): string | null {
  * @returns true if valid
  */
 export function validateIssuerUrl(issuer: string): boolean {
+    if (typeof issuer !== 'string' || issuer.length > 2048) {
+        return false;
+    }
     try {
         const url = new URL(issuer);
-        return url.protocol === 'https:' || (url.protocol === 'http:' && url.hostname === 'localhost');
+        // Issuers never carry credentials or fragments.
+        if (url.username || url.password || url.hash) {
+            return false;
+        }
+        if (url.protocol === 'https:') {
+            return true;
+        }
+        // Plain HTTP is only tolerated for loopback development issuers.
+        const isLoopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1';
+        return url.protocol === 'http:' && isLoopback && process.env.NODE_ENV !== 'production';
     } catch {
         return false;
     }
