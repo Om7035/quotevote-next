@@ -9,22 +9,22 @@ jest.mock("@apollo/client/react", () => {
     __esModule: true,
     useQuery: jest.fn(),
     useMutation: jest.fn(),
-    useApolloClient: jest.fn(),
+    useLazyQuery: jest.fn(),
   };
 });
 
-import { useApolloClient, useMutation, useQuery } from "@apollo/client/react";
+import { useLazyQuery, useMutation, useQuery } from "@apollo/client/react";
 import SolidPodCard from "@/components/settings/SolidPodCard";
 import {
   SOLID_DISCONNECT,
   SOLID_PUSH_PORTABLE_STATE,
   SOLID_START_CONNECT,
 } from "@/graphql/mutations";
-import { GET_SOLID_CONNECTION_STATUS } from "@/graphql/queries";
+import { GET_SOLID_CONNECTION_STATUS, SOLID_PULL_PORTABLE_STATE } from "@/graphql/queries";
 
 const mockUseQuery = useQuery as unknown as jest.Mock;
 const mockUseMutation = useMutation as unknown as jest.Mock;
-const mockUseApolloClient = useApolloClient as unknown as jest.Mock;
+const mockUseLazyQuery = useLazyQuery as unknown as jest.Mock;
 
 const WEB_ID = "https://pod.example/profile/card#me";
 
@@ -93,7 +93,7 @@ beforeEach(() => {
   pushMock = jest.fn().mockResolvedValue({ data: { solidPushPortableState: true } });
   disconnectMock = jest.fn().mockResolvedValue({ data: { solidDisconnect: true } });
   pullQueryMock = jest.fn();
-  mockUseApolloClient.mockReturnValue({ query: pullQueryMock });
+  mockUseLazyQuery.mockReturnValue([pullQueryMock, { loading: false }]);
   mockMutations();
 });
 
@@ -204,9 +204,11 @@ describe("SolidPodCard", () => {
     expect(screen.getByText("Pod Ada")).toBeInTheDocument();
     expect(screen.getByText("From the Pod")).toBeInTheDocument();
     expect(screen.getByText("dark")).toBeInTheDocument();
-    expect(pullQueryMock).toHaveBeenCalledWith(
+    expect(mockUseLazyQuery).toHaveBeenCalledWith(
+      SOLID_PULL_PORTABLE_STATE,
       expect.objectContaining({ fetchPolicy: "network-only" })
     );
+    expect(pullQueryMock).toHaveBeenCalledTimes(1);
   });
 
   it("disconnects only after confirmation", async () => {

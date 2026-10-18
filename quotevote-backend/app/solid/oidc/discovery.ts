@@ -46,6 +46,7 @@ export async function discoverIssuer(issuerOrWebId: string): Promise<IssuerMetad
             headers: {
                 'Accept': 'application/json',
             },
+            redirect: 'error',
             signal: AbortSignal.timeout(10000), // 10 second timeout
         });
 
@@ -87,6 +88,7 @@ async function discoverIssuerFromWebId(webId: string): Promise<string> {
             headers: {
                 'Accept': 'application/ld+json, application/json, text/turtle',
             },
+            redirect: 'error',
             signal: AbortSignal.timeout(10000),
         });
 
@@ -119,38 +121,41 @@ async function discoverIssuerFromWebId(webId: string): Promise<string> {
 }
 
 /**
- * Extract issuer from JSON-LD WebID document
- * @param data - JSON-LD data
- * @returns Issuer URL or null
+ * Every solid:oidcIssuer value in a JSON-LD WebID document (compact or full IRI keys,
+ * `{ "@id": ... }` values, arrays and `@graph`). No fallback: callers decide what an
+ * empty result means.
+ * @param data - Parsed JSON-LD
+ * @returns Issuer URLs in document order (possibly empty)
  */
-function extractIssuerFromJsonLd(data: unknown): string | null {
+export function extractIssuersFromJsonLd(data: unknown): string[] {
     if (!data || typeof data !== 'object') {
-        return null;
+        return [];
+    }
+    if (Array.isArray(data)) {
+        return data.flatMap((item) => extractIssuersFromJsonLd(item));
     }
 
     const obj = data as Record<string, unknown>;
-
-    // Check for solid:oidcIssuer
-    if (typeof obj['solid:oidcIssuer'] === 'string') {
-        return obj['solid:oidcIssuer'];
-    }
-
-    // Check for http://www.w3.org/ns/solid/terms#oidcIssuer
-    if (typeof obj['http://www.w3.org/ns/solid/terms#oidcIssuer'] === 'string') {
-        return obj['http://www.w3.org/ns/solid/terms#oidcIssuer'];
-    }
-
-    // Check nested objects
-    if (typeof obj['@graph'] === 'object' && Array.isArray(obj['@graph'])) {
-        for (const item of obj['@graph']) {
-            const issuer = extractIssuerFromJsonLd(item);
-            if (issuer) {
-                return issuer;
+    const issuers: string[] = [];
+    for (const key of ['solid:oidcIssuer', 'http://www.w3.org/ns/solid/terms#oidcIssuer']) {
+        const values: unknown[] = Array.isArray(obj[key]) ? (obj[key] as unknown[]) : [obj[key]];
+        for (const value of values) {
+            if (typeof value === 'string') {
+                issuers.push(value);
+            } else if (value && typeof value === 'object' && typeof (value as { '@id'?: unknown })['@id'] === 'string') {
+                issuers.push((value as { '@id': string })['@id']);
             }
         }
     }
 
-    return null;
+    return [...issuers, ...extractIssuersFromJsonLd(obj['@graph'])];
+}
+
+/**
+ * First solid:oidcIssuer in a JSON-LD WebID document, or null.
+ */
+function extractIssuerFromJsonLd(data: unknown): string | null {
+    return extractIssuersFromJsonLd(data)[0] ?? null;
 }
 
 /**

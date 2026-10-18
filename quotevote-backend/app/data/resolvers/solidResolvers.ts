@@ -8,6 +8,8 @@ import {
 } from '~/solid/oidc/authorization';
 import { discoverIssuer, validateIssuerUrl } from '~/solid/oidc/discovery';
 import { verifyIdToken } from '~/solid/oidc/security';
+import { assertWebIdListsIssuer, isHttpsUrl } from '~/solid/oidc/webid';
+import { generateDpopKeyPair, readDpopKeyPair, type DpopKeyPair } from '~/solid/oidc/dpop';
 import { encryptTokens, decryptTokens } from '~/solid/storage/encryption';
 import {
     pullPortableState,
@@ -20,6 +22,7 @@ import {
     SolidOidcError,
     SolidPodError,
     SolidFeatureDisabledError,
+    SolidConfigError,
 } from '~/solid/errors';
 import type { PortableStateInput, ActivityEventInput } from '~/solid/schemas/portable';
 
@@ -34,7 +37,7 @@ import type { PortableStateInput, ActivityEventInput } from '~/solid/schemas/por
 
 /** Authorization state (CSRF + PKCE binding) lifetime */
 const AUTH_STATE_TTL_MS = 10 * 60 * 1000;
-const SOLID_SCOPE = 'openid profile offline_access';
+const SOLID_SCOPE = 'openid offline_access webid';
 const DEFAULT_EXPIRES_IN_SECONDS = 3600;
 
 const MSG_INVALID_REQUEST = 'Authorization request is invalid or has expired. Please try connecting again.';
@@ -42,8 +45,29 @@ const MSG_REAUTH = 'Your Solid Pod session has expired. Please reconnect your So
 const MSG_UNAVAILABLE = 'The Solid Pod service is unavailable. Please try again later.';
 const MSG_NOT_CONNECTED = 'No Solid Pod is connected to this account.';
 
-function getClientId(): string {
-    return process.env.SOLID_CLIENT_ID || 'quotevote-backend';
+/**
+ * OAuth client ID: the public URL of the Client ID Document served by the frontend.
+ * There is no default: an unset or non-https value is a configuration error.
+ * http is accepted only for localhost outside production.
+ */
+export function getClientId(): string {
+    const raw = process.env.SOLID_CLIENT_ID?.trim();
+    if (!raw) {
+        throw new SolidConfigError('SOLID_CLIENT_ID is not set');
+    }
+    let url: URL;
+    try {
+        url = new URL(raw);
+    } catch {
+        throw new SolidConfigError('SOLID_CLIENT_ID must be an absolute URL');
+    }
+    const devLoopback =
+        process.env.NODE_ENV !== 'production' &&
+        (url.hostname === 'localhost' || url.hostname === '127.0.0.1');
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && devLoopback)) {
+        throw new SolidConfigError('SOLID_CLIENT_ID must be an https URL');
+    }
+    return raw;
 }
 
 /**
@@ -99,23 +123,18 @@ function toSolidGraphQLError(error: unknown, operation: string): GraphQLError {
 }
 
 /**
- * Accept only absolute http(s) URLs as WebIDs.
+ * Read the PKCE verifier and DPoP key pair stored with an authorization state.
  */
-function isHttpUrl(value: string): boolean {
-    try {
-        const url = new URL(value);
-        return url.protocol === 'https:' || url.protocol === 'http:';
-    } catch {
-        return false;
-    }
-}
-
-function readVerifier(encrypted: string): string {
+function readPendingAuth(encrypted: string): { codeVerifier: string; dpop: DpopKeyPair } {
     const decrypted = decryptTokens(encrypted);
     if (typeof decrypted.codeVerifier !== 'string' || decrypted.codeVerifier === '') {
         throw new Error('Stored PKCE verifier is malformed');
     }
-    return decrypted.codeVerifier;
+    const dpop = readDpopKeyPair(decrypted.dpopPrivateJwk, decrypted.dpopPublicJwk);
+    if (!dpop) {
+        throw new Error('Stored DPoP key is missing');
+    }
+    return { codeVerifier: decrypted.codeVerifier, dpop };
 }
 
 export const solidResolvers = {
@@ -146,6 +165,19 @@ export const solidResolvers = {
                 issuer: connection.issuer,
                 lastSyncAt: connection.lastSyncAt?.toISOString() ?? null,
             };
+        },
+
+        /**
+         * Pull portable state from Solid Pod (read-only; nothing is applied locally)
+         */
+        solidPullPortableState: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
+            const userId = requireUserId(context);
+
+            try {
+                return await pullPortableState(userId, getClientId(), context.prisma);
+            } catch (error) {
+                throw toSolidGraphQLError(error, 'solidPullPortableState');
+            }
         },
     },
 
@@ -186,13 +218,20 @@ export const solidResolvers = {
                     throw new Error('PKCE verifier was not generated');
                 }
 
+                // The DPoP key is generated per connection and bound to the tokens issued for it.
+                const dpop = generateDpopKeyPair();
+
                 await context.prisma.solidAuthState.create({
                     data: {
                         state: result.state,
                         userId,
                         issuer,
                         redirectUri,
-                        encryptedVerifier: encryptTokens({ codeVerifier: result.codeVerifier }),
+                        encryptedVerifier: encryptTokens({
+                            codeVerifier: result.codeVerifier,
+                            dpopPrivateJwk: dpop.privateJwk,
+                            dpopPublicJwk: dpop.publicJwk,
+                        }),
                         expiresAt: new Date(Date.now() + AUTH_STATE_TTL_MS),
                     },
                 });
@@ -239,14 +278,16 @@ export const solidResolvers = {
             }
 
             try {
-                const codeVerifier = readVerifier(authState.encryptedVerifier);
+                const clientId = getClientId();
+                const pending = readPendingAuth(authState.encryptedVerifier);
 
                 const tokens = await exchangeCodeForTokens(
                     code,
-                    codeVerifier,
+                    pending.codeVerifier,
                     redirectUri,
                     authState.issuer,
-                    getClientId()
+                    clientId,
+                    pending.dpop
                 );
 
                 if (!tokens.id_token) {
@@ -259,7 +300,7 @@ export const solidResolvers = {
                 try {
                     claims = await verifyIdToken(tokens.id_token, {
                         issuer: authState.issuer,
-                        clientId: getClientId(),
+                        clientId,
                         jwksUri: metadata.jwks_uri,
                     });
                 } catch {
@@ -271,10 +312,13 @@ export const solidResolvers = {
                         : typeof claims.sub === 'string'
                             ? claims.sub
                             : '';
-                if (!isHttpUrl(candidate)) {
+                if (!isHttpsUrl(candidate)) {
                     throw new SolidOidcError('invalid_response', 'ID token does not contain a valid WebID');
                 }
                 const webId = candidate;
+
+                // The WebID must dereference to a profile that names this issuer.
+                await assertWebIdListsIssuer(webId, authState.issuer);
 
                 // Keep only the claims the connection needs.
                 const minimalClaims: Prisma.InputJsonObject = {
@@ -287,8 +331,11 @@ export const solidResolvers = {
 
                 const encryptedTokens = encryptTokens({
                     access_token: tokens.access_token,
+                    token_type: tokens.token_type,
                     ...(tokens.refresh_token && { refresh_token: tokens.refresh_token }),
                     id_token: tokens.id_token,
+                    dpop_private_jwk: pending.dpop.privateJwk,
+                    dpop_public_jwk: pending.dpop.publicJwk,
                 });
                 const tokenExpiry = new Date(
                     Date.now() + (tokens.expires_in || DEFAULT_EXPIRES_IN_SECONDS) * 1000
@@ -340,19 +387,6 @@ export const solidResolvers = {
             await context.prisma.solidAuthState.deleteMany({ where: { userId } });
 
             return true;
-        },
-
-        /**
-         * Pull portable state from Solid Pod (returned to the caller; nothing is applied locally)
-         */
-        solidPullPortableState: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
-            const userId = requireUserId(context);
-
-            try {
-                return await pullPortableState(userId, getClientId(), context.prisma);
-            } catch (error) {
-                throw toSolidGraphQLError(error, 'solidPullPortableState');
-            }
         },
 
         /**

@@ -43,6 +43,7 @@ import {
   PROFILE_BIO_MAX_LENGTH,
 } from '@/lib/constants/profile'
 import SolidPodCard from '@/components/settings/SolidPodCard'
+import { isSolidEnabled } from '@/lib/constants/solid'
 import { parseAvatarToUrl } from '@/lib/avatar'
 import type { SettingsUserData } from '@/types/settings'
 import type { UpdateUserResponse } from '@/types/test'
@@ -481,12 +482,14 @@ export default function SettingsPageClient() {
         </CardContent>
       </Card>
 
-      <SolidPodCard
-        displayName={name}
-        bio={fetchedBio}
-        avatarUrl={solidAvatarUrl}
-        theme={localDarkMode ? 'dark' : 'light'}
-      />
+      {isSolidEnabled() && (
+        <SolidPodCard
+          displayName={name}
+          bio={fetchedBio}
+          avatarUrl={solidAvatarUrl}
+          theme={localDarkMode ? 'dark' : 'light'}
+        />
+      )}
     </div>
   )
 }

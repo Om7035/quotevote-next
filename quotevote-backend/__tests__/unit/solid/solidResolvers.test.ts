@@ -12,7 +12,8 @@ import {
     pushPortableState,
     appendActivityEvent,
 } from '~/solid/sync/syncService';
-import { decryptTokens } from '~/solid/storage/encryption';
+import { assertWebIdListsIssuer } from '~/solid/oidc/webid';
+import { decryptTokens, encryptTokens } from '~/solid/storage/encryption';
 import { SolidOidcError, SolidPodError, SolidNotConnectedError } from '~/solid/errors';
 
 jest.mock('~/data/utils/logger', () => ({
@@ -37,6 +38,11 @@ jest.mock('~/solid/oidc/security', () => ({
     ),
 }));
 
+jest.mock('~/solid/oidc/webid', () => ({
+    ...jest.requireActual('~/solid/oidc/webid'),
+    assertWebIdListsIssuer: jest.fn().mockResolvedValue(undefined),
+}));
+
 jest.mock('~/solid/sync/syncService', () => ({
     pullPortableState: jest.fn(),
     pushPortableState: jest.fn(),
@@ -49,7 +55,7 @@ const USER_A = '507f1f77bcf86cd799439011';
 const USER_B = '507f1f77bcf86cd799439022';
 const REDIRECT = 'http://localhost:3000/settings/solid/callback';
 const ISSUER = 'https://issuer.example';
-const CLIENT_ID = 'quotevote-backend';
+const CLIENT_ID = 'https://app.example/solid/client-id.json';
 const WEBID_A = 'https://pod-a.example/profile/card#me';
 const WEBID_B = 'https://pod-b.example/profile/card#me';
 
@@ -137,6 +143,10 @@ function makeContext(prisma: unknown, userId: string | null): GraphQLContext {
     } as unknown as GraphQLContext;
 }
 
+function encryptForTest(data: Record<string, unknown>): string {
+    return encryptTokens(data);
+}
+
 function makeIdToken(claims: Record<string, unknown>): string {
     const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
     const payload = Buffer.from(JSON.stringify(claims)).toString('base64url');
@@ -178,7 +188,7 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
         jest.clearAllMocks();
         delete process.env.CLIENT_URL;
         delete process.env.SOLID_REDIRECT_URI_BASE;
-        delete process.env.SOLID_CLIENT_ID;
+        process.env.SOLID_CLIENT_ID = CLIENT_ID;
 
         store = createFakePrisma();
         stateCounter = 0;
@@ -196,9 +206,9 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
             access_token: 'ACCESS-TOKEN-A',
             refresh_token: 'REFRESH-TOKEN-A',
             id_token: makeIdToken({ sub: WEBID_A, webid: WEBID_A, iss: ISSUER, aud: CLIENT_ID, exp: 9999999999 }),
-            token_type: 'Bearer',
+            token_type: 'DPoP',
             expires_in: 600,
-            scope: 'openid profile offline_access',
+            scope: 'openid offline_access webid',
         });
     });
 
@@ -217,7 +227,12 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
             const row = store.authStates.get('STATE-1');
             expect(row).toMatchObject({ state: 'STATE-1', userId: USER_A, issuer: ISSUER, redirectUri: REDIRECT });
             expect(String(row?.encryptedVerifier)).not.toContain('VERIFIER-1');
-            expect(decryptTokens(String(row?.encryptedVerifier))).toEqual({ codeVerifier: 'VERIFIER-1' });
+            expect(decryptTokens(String(row?.encryptedVerifier))).toMatchObject({
+                codeVerifier: 'VERIFIER-1',
+                dpopPrivateJwk: expect.objectContaining({ kty: 'EC', crv: 'P-256', d: expect.any(String) }),
+                dpopPublicJwk: expect.objectContaining({ kty: 'EC', crv: 'P-256' }),
+            });
+            expect(decryptTokens(String(row?.encryptedVerifier)).dpopPublicJwk).not.toHaveProperty('d');
 
             const ttl = (row?.expiresAt as Date).getTime() - Date.now();
             expect(ttl).toBeGreaterThan(9 * 60 * 1000);
@@ -262,6 +277,43 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
             await expect(startConnect(ctxA(), 'http://localhost:4000')).resolves.toBeDefined();
         });
 
+        it('requests the scopes needed for a WebID-bound DPoP session', async () => {
+            await startConnect(ctxA());
+            expect(generateAuthorizationUrl).toHaveBeenCalledWith(
+                expect.objectContaining({ scope: 'openid offline_access webid' })
+            );
+        });
+
+        it('fails with SOLID_UNAVAILABLE and never calls the provider when SOLID_CLIENT_ID is unset', async () => {
+            delete process.env.SOLID_CLIENT_ID;
+
+            const error = await captureError(startConnect(ctxA()));
+
+            expect(codeOf(error)).toBe('SOLID_UNAVAILABLE');
+            expect(error.message).not.toMatch(/SOLID_CLIENT_ID/);
+            expect(generateAuthorizationUrl).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            ['a non-https public URL', 'http://app.example/solid/client-id.json'],
+            ['a value that is not a URL', 'quotevote-backend'],
+        ])('fails with SOLID_UNAVAILABLE for SOLID_CLIENT_ID as %s', async (_label, value) => {
+            process.env.SOLID_CLIENT_ID = value;
+
+            const error = await captureError(startConnect(ctxA()));
+
+            expect(codeOf(error)).toBe('SOLID_UNAVAILABLE');
+            expect(generateAuthorizationUrl).not.toHaveBeenCalled();
+        });
+
+        it('accepts http://localhost as SOLID_CLIENT_ID outside production', async () => {
+            process.env.SOLID_CLIENT_ID = 'http://localhost:3000/solid/client-id.json';
+            await expect(startConnect(ctxA())).resolves.toBeDefined();
+            expect(generateAuthorizationUrl).toHaveBeenCalledWith(
+                expect.objectContaining({ clientId: 'http://localhost:3000/solid/client-id.json' })
+            );
+        });
+
         it('requires authentication', async () => {
             const error = await captureError(startConnect(makeContext(store.prisma, null)));
             expect(codeOf(error)).toBe('UNAUTHENTICATED');
@@ -280,13 +332,24 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
                 issuer: ISSUER,
                 message: 'Solid Pod connected successfully',
             });
-            expect(exchangeCodeForTokens).toHaveBeenCalledWith('CODE-1', 'VERIFIER-1', REDIRECT, ISSUER, CLIENT_ID);
+            expect(exchangeCodeForTokens).toHaveBeenCalledWith(
+                'CODE-1',
+                'VERIFIER-1',
+                REDIRECT,
+                ISSUER,
+                CLIENT_ID,
+                expect.objectContaining({ privateJwk: expect.any(Object), publicJwk: expect.any(Object) })
+            );
+            expect(assertWebIdListsIssuer).toHaveBeenCalledWith(WEBID_A, ISSUER);
 
             const connection = store.connections.get(USER_A);
-            expect(connection).toMatchObject({ webId: WEBID_A, issuer: ISSUER, scopes: ['openid', 'profile', 'offline_access'] });
+            expect(connection).toMatchObject({ webId: WEBID_A, issuer: ISSUER, scopes: ['openid', 'offline_access', 'webid'] });
             expect(decryptTokens(String(connection?.encryptedTokens))).toMatchObject({
                 access_token: 'ACCESS-TOKEN-A',
                 refresh_token: 'REFRESH-TOKEN-A',
+                token_type: 'DPoP',
+                dpop_private_jwk: expect.objectContaining({ kty: 'EC', d: expect.any(String) }),
+                dpop_public_jwk: expect.objectContaining({ kty: 'EC', crv: 'P-256' }),
             });
             expect(Object.keys(connection?.idTokenClaims as object).sort()).toEqual(['aud', 'exp', 'iss', 'sub', 'webid']);
             expect(connection?.tokenExpiry).toBeInstanceOf(Date);
@@ -389,18 +452,56 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
             expect(codeOf(error)).toBe('SOLID_REAUTH_REQUIRED');
         });
 
-        it('rejects an ID token without a valid http(s) WebID as SOLID_UNAVAILABLE', async () => {
+        it.each([
+            ['a non-URL value', 'javascript:alert(1)'],
+            ['a plain http WebID', 'http://pod-a.example/profile/card#me'],
+        ])('rejects an ID token with %s as SOLID_UNAVAILABLE without fetching the profile', async (_label, webid) => {
             (exchangeCodeForTokens as jest.Mock).mockResolvedValueOnce({
                 access_token: 'a',
-                id_token: makeIdToken({ sub: 'javascript:alert(1)' }),
-                token_type: 'Bearer',
+                id_token: makeIdToken({ sub: webid }),
+                token_type: 'DPoP',
             });
             await startConnect(ctxA());
 
             const error = await captureError(finishConnect(ctxA(), { code: 'C', state: 'STATE-1' }));
 
             expect(codeOf(error)).toBe('SOLID_UNAVAILABLE');
+            expect(assertWebIdListsIssuer).not.toHaveBeenCalled();
             expect(store.connections.has(USER_A)).toBe(false);
+        });
+
+        it('rejects a WebID whose profile does not list the token issuer as SOLID_UNAVAILABLE', async () => {
+            (assertWebIdListsIssuer as jest.Mock).mockRejectedValueOnce(
+                new SolidOidcError('invalid_response', 'WebID does not list the token issuer')
+            );
+            await startConnect(ctxA());
+
+            const error = await captureError(finishConnect(ctxA(), { code: 'C', state: 'STATE-1' }));
+
+            expect(codeOf(error)).toBe('SOLID_UNAVAILABLE');
+            expect(store.connections.has(USER_A)).toBe(false);
+        });
+
+        it('fails with SOLID_UNAVAILABLE when the stored state has no DPoP key', async () => {
+            await startConnect(ctxA());
+            const row = store.authStates.get('STATE-1')!;
+            row.encryptedVerifier = encryptForTest({ codeVerifier: 'VERIFIER-1' });
+
+            const error = await captureError(finishConnect(ctxA(), { code: 'C', state: 'STATE-1' }));
+
+            expect(codeOf(error)).toBe('SOLID_UNAVAILABLE');
+            expect(exchangeCodeForTokens).not.toHaveBeenCalled();
+        });
+
+        it('binds the tokens to the DPoP key created at start (same public key in the proof and the stored blob)', async () => {
+            await startConnect(ctxA());
+            const stored = decryptTokens(String(store.authStates.get('STATE-1')!.encryptedVerifier));
+
+            await finishConnect(ctxA(), { code: 'C', state: 'STATE-1' });
+
+            const dpopArg = (exchangeCodeForTokens as jest.Mock).mock.calls[0][5];
+            expect(dpopArg.publicJwk).toEqual(stored.dpopPublicJwk);
+            expect(dpopArg.privateJwk).toEqual(stored.dpopPrivateJwk);
         });
 
         it('never leaks the code, verifier, tokens or provider body in errors', async () => {
@@ -467,7 +568,7 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
         it('scopes pull to the authenticated user', async () => {
             (pullPortableState as jest.Mock).mockResolvedValue({ portableSchemaVersion: '0' });
 
-            await R.Mutation.solidPullPortableState(undefined, {}, ctxA());
+            await R.Query.solidPullPortableState(undefined, {}, ctxA());
 
             expect(pullPortableState).toHaveBeenCalledWith(USER_A, CLIENT_ID, store.prisma);
         });
@@ -513,7 +614,7 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
                 new SolidOidcError('invalid_grant', 'Authorization grant was rejected', 400)
             );
 
-            const error = await captureError(R.Mutation.solidPullPortableState(undefined, {}, ctxA()));
+            const error = await captureError(R.Query.solidPullPortableState(undefined, {}, ctxA()));
 
             expect(codeOf(error)).toBe('SOLID_REAUTH_REQUIRED');
         });
@@ -533,7 +634,7 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
         it('maps a Pod timeout to SOLID_UNAVAILABLE with a generic message', async () => {
             (pullPortableState as jest.Mock).mockRejectedValue(new SolidPodError('timeout', 'Pod request timed out'));
 
-            const error = await captureError(R.Mutation.solidPullPortableState(undefined, {}, ctxA()));
+            const error = await captureError(R.Query.solidPullPortableState(undefined, {}, ctxA()));
 
             expect(codeOf(error)).toBe('SOLID_UNAVAILABLE');
             expect(error.message).not.toMatch(/timed out|Pod request/);
@@ -542,7 +643,7 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
         it('maps unexpected failures to SOLID_UNAVAILABLE without forwarding their message', async () => {
             (pullPortableState as jest.Mock).mockRejectedValue(new Error('boom TOKEN-XYZ'));
 
-            const error = await captureError(R.Mutation.solidPullPortableState(undefined, {}, ctxA()));
+            const error = await captureError(R.Query.solidPullPortableState(undefined, {}, ctxA()));
 
             expect(codeOf(error)).toBe('SOLID_UNAVAILABLE');
             expect(error.message).not.toMatch(/TOKEN-XYZ/);
@@ -551,7 +652,7 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
         it('maps a missing connection to BAD_USER_INPUT', async () => {
             (pullPortableState as jest.Mock).mockRejectedValue(new SolidNotConnectedError());
 
-            const error = await captureError(R.Mutation.solidPullPortableState(undefined, {}, ctxA()));
+            const error = await captureError(R.Query.solidPullPortableState(undefined, {}, ctxA()));
 
             expect(codeOf(error)).toBe('BAD_USER_INPUT');
         });
@@ -560,7 +661,7 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
             store.connections.set(USER_A, { userId: USER_A, webId: WEBID_A, issuer: ISSUER });
             (pullPortableState as jest.Mock).mockRejectedValue(new SolidPodError('network', 'Pod request failed'));
 
-            await captureError(R.Mutation.solidPullPortableState(undefined, {}, ctxA()));
+            await captureError(R.Query.solidPullPortableState(undefined, {}, ctxA()));
             const status = await R.Query.solidConnectionStatus(undefined, {}, ctxA());
 
             expect(status).toMatchObject({ connected: true, webId: WEBID_A });
@@ -571,7 +672,7 @@ describe('solidResolvers (Prisma-backed OIDC lifecycle)', () => {
         it.each([
             ['solidConnectionStatus', () => R.Query.solidConnectionStatus(undefined, {}, makeContext(store.prisma, null))],
             ['solidDisconnect', () => R.Mutation.solidDisconnect(undefined, {}, makeContext(store.prisma, null))],
-            ['solidPullPortableState', () => R.Mutation.solidPullPortableState(undefined, {}, makeContext(store.prisma, null))],
+            ['solidPullPortableState', () => R.Query.solidPullPortableState(undefined, {}, makeContext(store.prisma, null))],
             [
                 'solidPushPortableState',
                 () => R.Mutation.solidPushPortableState(undefined, { input: {} }, makeContext(store.prisma, null)),

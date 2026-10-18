@@ -1,18 +1,19 @@
 import crypto from 'crypto';
 import { discoverIssuer } from './discovery';
+import { createDpopProof, type DpopKeyPair } from './dpop';
 import { SolidOidcError } from '../errors';
 
 /**
  * Solid OIDC Authorization Flow
- * Handles OAuth 2.0 / OpenID Connect authorization code flow (with PKCE).
+ * Handles OAuth 2.0 / OpenID Connect authorization code flow (with PKCE) and the
+ * token endpoint calls (code exchange and refresh). Token requests carry a DPoP proof.
  *
  * Security notes:
  * - Errors thrown here never include provider response bodies, tokens,
  *   authorization codes or verifiers. Only the error code and HTTP status are kept.
- * - `parseIdToken` does NOT verify the JWT signature. Verification needs the
- *   issuer's JWKS (`jwks_uri` from discovery) and a JWT library; neither is
- *   available as a direct dependency, so the ID token is only read from the
- *   back-channel token response. See app/solid/README.md ("Limitations").
+ * - The ID token returned here is NOT verified. Verification (issuer JWKS signature,
+ *   issuer, audience, expiry) is done by `verifyIdToken` in security.ts before any claim is used.
+ * - Token endpoint requests never follow redirects (`redirect: 'error'`).
  */
 
 export interface AuthorizationParams {
@@ -81,6 +82,7 @@ export async function generateAuthorizationUrl(
  * @param redirectUri - Redirect URI used in authorization
  * @param issuer - Issuer URL
  * @param clientId - Client ID
+ * @param dpop - DPoP key pair the tokens will be bound to
  * @returns Token response
  * @throws {SolidOidcError} with a sanitized message
  */
@@ -89,7 +91,8 @@ export async function exchangeCodeForTokens(
     codeVerifier: string,
     redirectUri: string,
     issuer: string,
-    clientId: string
+    clientId: string,
+    dpop?: DpopKeyPair
 ): Promise<TokenResponse> {
     const body = new URLSearchParams({
         grant_type: 'authorization_code',
@@ -99,7 +102,7 @@ export async function exchangeCodeForTokens(
         code_verifier: codeVerifier,
     });
 
-    return requestTokens(issuer, body);
+    return requestTokens(issuer, body, dpop);
 }
 
 /**
@@ -107,13 +110,15 @@ export async function exchangeCodeForTokens(
  * @param refreshToken - Refresh token
  * @param issuer - Issuer URL
  * @param clientId - Client ID
+ * @param dpop - DPoP key pair the tokens are bound to (the same key as at connect time)
  * @returns New token response
  * @throws {SolidOidcError} code `invalid_grant` when the provider rejects the refresh token
  */
 export async function refreshAccessToken(
     refreshToken: string,
     issuer: string,
-    clientId: string
+    clientId: string,
+    dpop?: DpopKeyPair
 ): Promise<TokenResponse> {
     const body = new URLSearchParams({
         grant_type: 'refresh_token',
@@ -121,32 +126,66 @@ export async function refreshAccessToken(
         client_id: clientId,
     });
 
-    return requestTokens(issuer, body);
+    return requestTokens(issuer, body, dpop);
 }
 
 /**
  * POST a form to the issuer's token endpoint and validate the response.
+ * If the provider asks for a DPoP nonce (DPoP-Nonce header on 400/401), the request is
+ * repeated once with that nonce.
  */
-async function requestTokens(issuer: string, body: URLSearchParams): Promise<TokenResponse> {
+async function requestTokens(
+    issuer: string,
+    body: URLSearchParams,
+    dpop?: DpopKeyPair
+): Promise<TokenResponse> {
     const metadata = await discoverIssuer(issuer).catch(() => {
         throw new SolidOidcError('provider_error', 'Issuer discovery failed');
     });
 
-    let response: Response;
-    try {
-        response = await fetch(metadata.token_endpoint, {
+    let response = await postTokenRequest(metadata.token_endpoint, body, dpop, undefined);
+    const nonce = response.headers.get('DPoP-Nonce');
+    if (dpop && nonce && (response.status === 400 || response.status === 401)) {
+        response = await postTokenRequest(metadata.token_endpoint, body, dpop, nonce);
+    }
+
+    return parseTokenResponse(response);
+}
+
+async function postTokenRequest(
+    endpoint: string,
+    body: URLSearchParams,
+    dpop: DpopKeyPair | undefined,
+    nonce: string | undefined
+): Promise<Response> {
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+    };
+    if (dpop) {
+        headers.DPoP = createDpopProof({
+            privateJwk: dpop.privateJwk,
+            publicJwk: dpop.publicJwk,
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Accept': 'application/json',
-            },
+            url: endpoint,
+            nonce,
+        });
+    }
+
+    try {
+        return await fetch(endpoint, {
+            method: 'POST',
+            headers,
             body: body.toString(),
+            redirect: 'error',
             signal: AbortSignal.timeout(10000),
         });
     } catch {
         throw new SolidOidcError('provider_error', 'Token endpoint request failed');
     }
+}
 
+async function parseTokenResponse(response: Response): Promise<TokenResponse> {
     if (!response.ok) {
         // Only the standard OAuth error code is inspected; the body is never echoed.
         const providerError = await readOAuthErrorCode(response);
@@ -181,33 +220,6 @@ async function readOAuthErrorCode(response: Response): Promise<string | undefine
     } catch {
         return undefined;
     }
-}
-
-/**
- * Parse ID token claims (basic JWT parsing WITHOUT signature verification).
- * See the module header for why verification is not performed here.
- * @param idToken - ID token JWT
- * @returns Decoded claims
- * @throws {Error} with a generic message (the payload is never echoed)
- */
-export function parseIdToken(idToken: string): Record<string, unknown> {
-    const parts = typeof idToken === 'string' ? idToken.split('.') : [];
-    if (parts.length !== 3) {
-        throw new Error('Invalid JWT format');
-    }
-
-    let claims: unknown;
-    try {
-        claims = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
-    } catch {
-        // Do not forward JSON.parse messages: they can contain payload fragments.
-        throw new Error('Invalid ID token payload');
-    }
-
-    if (!claims || typeof claims !== 'object' || Array.isArray(claims)) {
-        throw new Error('Invalid ID token payload');
-    }
-    return claims as Record<string, unknown>;
 }
 
 /**

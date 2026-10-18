@@ -63,3 +63,11 @@ export class SolidFeatureDisabledError extends Error {
         this.name = 'SolidFeatureDisabledError';
     }
 }
+
+/** Server-side Solid configuration is missing or invalid (e.g. SOLID_CLIENT_ID). Never shown to clients. */
+export class SolidConfigError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'SolidConfigError';
+    }
+}

@@ -2,6 +2,8 @@ import type { PrismaClient } from '@prisma/client';
 import { SolidClient } from '../../../app/solid/client/solidClient';
 import { decryptTokens, encryptTokens } from '../../../app/solid/storage/encryption';
 import { refreshAccessToken } from '../../../app/solid/oidc/authorization';
+import { generateDpopKeyPair } from '../../../app/solid/oidc/dpop';
+import crypto from 'crypto';
 import {
     SolidNotConnectedError,
     SolidOidcError,
@@ -88,7 +90,7 @@ describe('SolidClient', () => {
 
             expect(response.status).toBe(200);
             expect(global.fetch).toHaveBeenCalledTimes(2);
-            expect(mockRefresh).toHaveBeenCalledWith('refresh-token', 'https://issuer.example', clientId);
+            expect(mockRefresh).toHaveBeenCalledWith('refresh-token', 'https://issuer.example', clientId, undefined);
 
             const secondHeaders = (global.fetch as jest.Mock).mock.calls[1][1].headers as Headers;
             expect(secondHeaders.get('Authorization')).toBe('Bearer new-token');
@@ -96,6 +98,7 @@ describe('SolidClient', () => {
             // Refresh token and id token are preserved when the provider omits them.
             expect(mockEncrypt).toHaveBeenCalledWith({
                 access_token: 'new-token',
+                token_type: 'Bearer',
                 refresh_token: 'refresh-token',
                 id_token: 'id-token',
             });
@@ -165,6 +168,150 @@ describe('SolidClient', () => {
             expect(error).toBeInstanceOf(SolidPodError);
             expect((error as SolidPodError).kind).toBe('timeout');
             expect((error as Error).message).not.toMatch(/pod\.example/);
+        });
+    });
+
+    describe('every request goes through the no-redirect policy', () => {
+        it('sets redirect: error on Pod requests', async () => {
+            prisma.solidConnection.findUnique.mockResolvedValue({
+                issuer: 'https://issuer.example',
+                encryptedTokens: 'enc',
+                tokenExpiry: future(),
+            });
+            mockDecrypt.mockReturnValue({ access_token: 'token' });
+            (global.fetch as jest.Mock).mockResolvedValue({ ok: true, status: 200 });
+
+            await makeClient().fetch('https://pod.example/x');
+
+            expect((global.fetch as jest.Mock).mock.calls[0][1].redirect).toBe('error');
+        });
+    });
+
+    describe('DPoP-bound connections', () => {
+        const pod = 'https://pod.example/private/quote-vote/preferences?x=1#frag';
+        const keys = generateDpopKeyPair();
+
+        const storeWithDpop = (): void => {
+            prisma.solidConnection.findUnique.mockResolvedValue({
+                issuer: 'https://issuer.example',
+                encryptedTokens: 'enc',
+                tokenExpiry: future(),
+            });
+            mockDecrypt.mockReturnValue({
+                access_token: 'AT-DPOP',
+                refresh_token: 'RT',
+                token_type: 'DPoP',
+                dpop_private_jwk: keys.privateJwk,
+                dpop_public_jwk: keys.publicJwk,
+            });
+        };
+
+        const decodeProof = (proof: string): { header: Record<string, unknown>; claims: Record<string, unknown>; verified: boolean } => {
+            const [h, c, sig] = proof.split('.');
+            const header = JSON.parse(Buffer.from(h, 'base64url').toString('utf8'));
+            const claims = JSON.parse(Buffer.from(c, 'base64url').toString('utf8'));
+            const key = crypto.createPublicKey({ key: header.jwk, format: 'jwk' });
+            const verified = crypto.verify(
+                'sha256',
+                Buffer.from(`${h}.${c}`),
+                { key, dsaEncoding: 'ieee-p1363' },
+                Buffer.from(sig, 'base64url')
+            );
+            return { header, claims, verified };
+        };
+
+        it('sends Authorization: DPoP with a fresh proof bound to the method, URL (no query) and access token', async () => {
+            storeWithDpop();
+            (global.fetch as jest.Mock).mockResolvedValue({ ok: true, status: 200, headers: new Headers() });
+
+            await makeClient().fetch(pod, { method: 'PUT' });
+
+            const init = (global.fetch as jest.Mock).mock.calls[0][1];
+            const headers = init.headers as Headers;
+            expect(headers.get('Authorization')).toBe('DPoP AT-DPOP');
+            expect(headers.get('Authorization')).not.toMatch(/^Bearer/);
+
+            const proof = decodeProof(headers.get('DPoP') as string);
+            expect(proof.verified).toBe(true);
+            expect(proof.header).toMatchObject({ typ: 'dpop+jwt', alg: 'ES256' });
+            expect(proof.header.jwk).toEqual(keys.publicJwk);
+            expect(proof.claims).toMatchObject({
+                htm: 'PUT',
+                htu: 'https://pod.example/private/quote-vote/preferences',
+                ath: crypto.createHash('sha256').update('AT-DPOP').digest('base64url'),
+            });
+            expect(proof.claims.nonce).toBeUndefined();
+        });
+
+        it('creates a new proof for each request', async () => {
+            storeWithDpop();
+            (global.fetch as jest.Mock).mockResolvedValue({ ok: true, status: 200, headers: new Headers() });
+            const client = makeClient();
+
+            await client.fetch(pod);
+            await client.fetch(pod);
+
+            const first = (global.fetch as jest.Mock).mock.calls[0][1].headers.get('DPoP');
+            const second = (global.fetch as jest.Mock).mock.calls[1][1].headers.get('DPoP');
+            expect(first).not.toBe(second);
+        });
+
+        it('repeats the request once with the server nonce when the Pod sends DPoP-Nonce', async () => {
+            storeWithDpop();
+            (global.fetch as jest.Mock)
+                .mockResolvedValueOnce({ ok: false, status: 401, headers: new Headers({ 'DPoP-Nonce': 'POD-NONCE' }) })
+                .mockResolvedValueOnce({ ok: true, status: 200, headers: new Headers() });
+
+            const response = await makeClient().fetch(pod);
+
+            expect(response.status).toBe(200);
+            expect(global.fetch).toHaveBeenCalledTimes(2);
+            const retryProof = decodeProof((global.fetch as jest.Mock).mock.calls[1][1].headers.get('DPoP'));
+            expect(retryProof.claims.nonce).toBe('POD-NONCE');
+            expect(retryProof.verified).toBe(true);
+        });
+
+        it('refreshes with the same DPoP key and keeps the key in the persisted tokens', async () => {
+            storeWithDpop();
+            mockRefresh.mockResolvedValue({ access_token: 'AT-NEW', token_type: 'DPoP', expires_in: 3600 });
+            mockEncrypt.mockReturnValue('enc-new');
+            (global.fetch as jest.Mock)
+                .mockResolvedValueOnce({ ok: false, status: 401, headers: new Headers() })
+                .mockResolvedValueOnce({ ok: true, status: 200, headers: new Headers() });
+
+            await makeClient().fetch(pod);
+
+            expect(mockRefresh).toHaveBeenCalledWith(
+                'RT',
+                'https://issuer.example',
+                clientId,
+                { privateJwk: keys.privateJwk, publicJwk: keys.publicJwk }
+            );
+            expect(mockEncrypt).toHaveBeenCalledWith(
+                expect.objectContaining({
+                    access_token: 'AT-NEW',
+                    token_type: 'DPoP',
+                    dpop_private_jwk: keys.privateJwk,
+                    dpop_public_jwk: keys.publicJwk,
+                })
+            );
+            const secondHeaders = (global.fetch as jest.Mock).mock.calls[1][1].headers as Headers;
+            expect(secondHeaders.get('Authorization')).toBe('DPoP AT-NEW');
+        });
+
+        it('refuses a DPoP-bound token whose key was not stored, asking the user to reconnect', async () => {
+            prisma.solidConnection.findUnique.mockResolvedValue({
+                issuer: 'https://issuer.example',
+                encryptedTokens: 'enc',
+                tokenExpiry: future(),
+            });
+            mockDecrypt.mockReturnValue({ access_token: 'AT', token_type: 'DPoP' });
+
+            const error = await makeClient().fetch(pod).catch((e: unknown) => e);
+
+            expect(error).toBeInstanceOf(SolidOidcError);
+            expect((error as SolidOidcError).code).toBe('invalid_grant');
+            expect(global.fetch).not.toHaveBeenCalled();
         });
     });
 

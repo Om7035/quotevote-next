@@ -9,7 +9,7 @@ import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { SOLID_FINISH_CONNECT } from "@/graphql/mutations";
-import { SOLID_CALLBACK_PATH } from "@/lib/constants/solid";
+import { isSolidEnabled, SOLID_CALLBACK_PATH } from "@/lib/constants/solid";
 import { mapSolidError } from "@/lib/solid/solidErrors";
 import type { SolidFinishConnectData, SolidFinishConnectVariables } from "@/types/solid";
 
@@ -21,13 +21,29 @@ const INCOMPLETE_LINK_MESSAGE =
   "This connection link is incomplete. Start the connection again from Settings.";
 const FINISH_FAILED_MESSAGE =
   "We could not finish connecting your Pod. Please try again from Settings.";
+const UNAVAILABLE_MESSAGE = "Connecting a Pod is not available right now.";
 
-type CallbackState = { kind: "pending" } | { kind: "success" } | { kind: "error"; message: string };
+type CallbackState =
+  | { kind: "pending" }
+  | { kind: "success" }
+  | { kind: "unavailable" }
+  | { kind: "error"; message: string };
+
+/** Early exits that depend only on the URL, so they need no effect. */
+function getInitialCallbackState(searchParams: URLSearchParams): CallbackState {
+  if (!isSolidEnabled()) return { kind: "unavailable" };
+  if (searchParams.get("error")) return { kind: "error", message: PROVIDER_ERROR_MESSAGE };
+  if (!searchParams.get("code") || !searchParams.get("state")) {
+    return { kind: "error", message: INCOMPLETE_LINK_MESSAGE };
+  }
+  return { kind: "pending" };
+}
 
 function SolidCallbackContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [state, setState] = useState<CallbackState>({ kind: "pending" });
+  const [initialState] = useState<CallbackState>(() => getInitialCallbackState(searchParams));
+  const [state, setState] = useState<CallbackState>(initialState);
   const [finishConnect] = useMutation<SolidFinishConnectData, SolidFinishConnectVariables>(
     SOLID_FINISH_CONNECT
   );
@@ -39,21 +55,14 @@ function SolidCallbackContent() {
     if (startedRef.current) return;
     startedRef.current = true;
 
-    const providerError = searchParams.get("error");
-    const code = searchParams.get("code");
-    const oauthState = searchParams.get("state");
-
     // Take the one-time code and state out of the address bar as soon as they are read.
     window.history.replaceState(null, "", SOLID_CALLBACK_PATH);
 
-    if (providerError) {
-      setState({ kind: "error", message: PROVIDER_ERROR_MESSAGE });
-      return;
-    }
-    if (!code || !oauthState) {
-      setState({ kind: "error", message: INCOMPLETE_LINK_MESSAGE });
-      return;
-    }
+    // Early exits were already decided in the initial state; never send the code then.
+    if (initialState.kind !== "pending") return;
+
+    const code = searchParams.get("code") ?? "";
+    const oauthState = searchParams.get("state") ?? "";
 
     finishConnect({
       variables: {
@@ -72,7 +81,7 @@ function SolidCallbackContent() {
       .catch((err: unknown) => {
         setState({ kind: "error", message: mapSolidError(err).message });
       });
-  }, [finishConnect, searchParams]);
+  }, [finishConnect, searchParams, initialState]);
 
   useEffect(() => {
     if (state.kind !== "success") return;
@@ -90,6 +99,17 @@ function SolidCallbackContent() {
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
             Finishing your Pod connection…
           </p>
+        )}
+
+        {state.kind === "unavailable" && (
+          <div className="space-y-3">
+            <p role="status" className="text-sm text-muted-foreground">
+              {UNAVAILABLE_MESSAGE}
+            </p>
+            <Button asChild variant="outline">
+              <Link href="/settings">Back to Settings</Link>
+            </Button>
+          </div>
         )}
 
         {state.kind === "success" && (

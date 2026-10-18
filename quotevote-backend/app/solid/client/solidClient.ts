@@ -1,6 +1,7 @@
 import { assertPublicUrl } from '../oidc/security';
 import type { PrismaClient, SolidConnection as SolidConnectionRecord } from '@prisma/client';
 import { refreshAccessToken, type TokenResponse } from '../oidc/authorization';
+import { createDpopProof, readDpopKeyPair, type DpopKeyPair } from '../oidc/dpop';
 import { encryptTokens, decryptTokens } from '../storage/encryption';
 import { SolidNotConnectedError, SolidOidcError, SolidPodError } from '../errors';
 
@@ -10,6 +11,11 @@ import { SolidNotConnectedError, SolidOidcError, SolidPodError } from '../errors
  *
  * Tokens are stored encrypted on the SolidConnection row (Prisma). Access
  * tokens are refreshed when they expire within 5 minutes, and once after a 401.
+ *
+ * Requests are DPoP-bound when the connection has a DPoP key pair (every connection made
+ * by this backend does): `Authorization: DPoP <token>` plus a fresh proof per request.
+ * Connections without a key pair fall back to Bearer (legacy rows only).
+ * Requests never follow redirects.
  */
 
 export interface SolidFetchOptions extends RequestInit {
@@ -27,6 +33,9 @@ interface StoredTokens {
     access_token?: string;
     refresh_token?: string;
     id_token?: string;
+    token_type?: string;
+    dpop_private_jwk?: unknown;
+    dpop_public_jwk?: unknown;
     [key: string]: unknown;
 }
 
@@ -42,6 +51,7 @@ export class SolidClient {
     private readonly prisma: PrismaClient;
     private accessToken: string | null = null;
     private tokenExpiry: Date | null = null;
+    private dpop: DpopKeyPair | null = null;
 
     constructor(config: SolidClientConfig) {
         this.userId = config.userId;
@@ -75,20 +85,54 @@ export class SolidClient {
     }
 
     /**
-     * Perform one HTTP request with the current access token.
+     * Send one request, repeating it once when the Pod asks for a DPoP nonce.
      */
     private async send(url: string, init: RequestInit, timeout: number): Promise<Response> {
+        const response = await this.sendOnce(url, init, timeout, undefined);
+        const nonce = response.headers?.get('DPoP-Nonce');
+        if (this.dpop && nonce && (response.status === 400 || response.status === 401)) {
+            // ponytail: nonce is fetched per request; cache it per connection if Pods rate-limit the retry.
+            return this.sendOnce(url, init, timeout, nonce);
+        }
+        return response;
+    }
+
+    /**
+     * Perform one HTTP request with the current access token.
+     */
+    private async sendOnce(
+        url: string,
+        init: RequestInit,
+        timeout: number,
+        nonce: string | undefined
+    ): Promise<Response> {
         if (!this.accessToken) {
             throw new SolidOidcError('invalid_grant', 'No valid access token available');
         }
 
         const headers = new Headers(init.headers);
-        headers.set('Authorization', `Bearer ${this.accessToken}`);
+        if (this.dpop) {
+            headers.set('Authorization', `DPoP ${this.accessToken}`);
+            headers.set(
+                'DPoP',
+                createDpopProof({
+                    privateJwk: this.dpop.privateJwk,
+                    publicJwk: this.dpop.publicJwk,
+                    method: init.method ?? 'GET',
+                    url,
+                    accessToken: this.accessToken,
+                    nonce,
+                })
+            );
+        } else {
+            headers.set('Authorization', `Bearer ${this.accessToken}`);
+        }
 
         try {
             return await fetch(url, {
                 ...init,
                 headers,
+                redirect: 'error',
                 signal: AbortSignal.timeout(timeout),
             });
         } catch (error) {
@@ -132,7 +176,7 @@ export class SolidClient {
     }
 
     /**
-     * Load access token from database
+     * Load access token and DPoP key pair from database
      */
     private async loadTokenFromDatabase(): Promise<void> {
         const connection = await this.loadConnection();
@@ -142,12 +186,19 @@ export class SolidClient {
             throw new SolidOidcError('invalid_grant', 'Stored credentials are incomplete');
         }
 
+        const dpop = readDpopKeyPair(tokens.dpop_private_jwk, tokens.dpop_public_jwk);
+        // A DPoP-bound token without its key cannot be used: the user has to reconnect.
+        if (isDpopTokenType(tokens.token_type) && !dpop) {
+            throw new SolidOidcError('invalid_grant', 'Stored credentials are incomplete');
+        }
+
         this.accessToken = tokens.access_token;
+        this.dpop = dpop;
         this.tokenExpiry = connection.tokenExpiry ?? null;
     }
 
     /**
-     * Refresh access token and persist the merged token set
+     * Refresh access token (same DPoP key) and persist the merged token set
      */
     private async refreshToken(): Promise<void> {
         const connection = await this.loadConnection();
@@ -158,13 +209,16 @@ export class SolidClient {
             throw new SolidOidcError('invalid_grant', 'No refresh token available');
         }
 
+        const dpop = readDpopKeyPair(stored.dpop_private_jwk, stored.dpop_public_jwk) ?? undefined;
         const newTokens = await refreshAccessToken(
             stored.refresh_token,
             connection.issuer,
-            this.clientId
+            this.clientId,
+            dpop
         );
 
         this.accessToken = newTokens.access_token;
+        this.dpop = dpop ?? null;
         const expiresIn = newTokens.expires_in || DEFAULT_EXPIRES_IN_SECONDS;
         this.tokenExpiry = new Date(Date.now() + expiresIn * 1000);
 
@@ -173,7 +227,7 @@ export class SolidClient {
 
     /**
      * Save tokens to database, preserving existing values not returned by the provider
-     * (e.g. refresh_token is kept when the refresh response omits it).
+     * (e.g. refresh_token is kept when the refresh response omits it; DPoP keys are never replaced).
      */
     private async saveTokensToDatabase(
         existing: StoredTokens,
@@ -183,6 +237,7 @@ export class SolidClient {
         const mergedTokens: StoredTokens = {
             ...existing,
             access_token: tokens.access_token,
+            ...(tokens.token_type && { token_type: tokens.token_type }),
             ...(tokens.refresh_token && { refresh_token: tokens.refresh_token }),
             ...(tokens.id_token && { id_token: tokens.id_token }),
         };
@@ -239,6 +294,10 @@ export class SolidClient {
 
 function httpError(status: number): SolidPodError {
     return new SolidPodError('http', `Pod request failed with HTTP ${status}`, status);
+}
+
+function isDpopTokenType(tokenType: unknown): boolean {
+    return typeof tokenType === 'string' && tokenType.toLowerCase() === 'dpop';
 }
 
 function readStoredTokens(encrypted: string): StoredTokens {

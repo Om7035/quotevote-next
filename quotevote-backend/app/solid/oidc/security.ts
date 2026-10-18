@@ -4,47 +4,65 @@ import net from 'net';
 
 /**
  * Network and token-verification guards for the Solid integration.
- * - assertPublicUrl: blocks SSRF to private / loopback / link-local hosts.
+ * - assertPublicUrl: blocks SSRF to private / loopback / link-local / reserved hosts.
  * - verifyIdToken: verifies the ID token signature (JWKS), issuer, audience and expiry.
+ *
+ * Outbound requests in the Solid code also use `redirect: 'error'`, so a public host
+ * cannot bounce a request to an internal address after the check has passed.
  */
 
-const IPV4_PRIVATE: Array<[number, number]> = [
-    [0x00000000, 8], // 0.0.0.0/8
-    [0x0a000000, 8], // 10.0.0.0/8
-    [0x64400000, 10], // 100.64.0.0/10
-    [0x7f000000, 8], // 127.0.0.0/8
-    [0xa9fe0000, 16], // 169.254.0.0/16
-    [0xac100000, 12], // 172.16.0.0/12
-    [0xc0a80000, 16], // 192.168.0.0/16
+const blockList = new net.BlockList();
+
+// IPv4 ranges that must never be reached from the server.
+const BLOCKED_IPV4: Array<[string, number]> = [
+    ['0.0.0.0', 8], // "this" network
+    ['10.0.0.0', 8], // private
+    ['100.64.0.0', 10], // carrier-grade NAT
+    ['127.0.0.0', 8], // loopback
+    ['169.254.0.0', 16], // link-local (cloud metadata)
+    ['172.16.0.0', 12], // private
+    ['192.0.0.0', 24], // IETF protocol assignments
+    ['192.168.0.0', 16], // private
+    ['198.18.0.0', 15], // benchmarking
+    ['224.0.0.0', 4], // multicast
+    ['240.0.0.0', 4], // reserved (includes 255.255.255.255)
 ];
 
-function ipv4ToInt(ip: string): number {
-    return ip.split('.').reduce((acc, part) => (acc << 8) + Number(part), 0) >>> 0;
+// IPv6 ranges that must never be reached from the server.
+const BLOCKED_IPV6: Array<[string, number]> = [
+    ['::', 128], // unspecified
+    ['::1', 128], // loopback
+    ['fc00::', 7], // unique local
+    ['fe80::', 10], // link-local
+    ['ff00::', 8], // multicast
+    ['64:ff9b::', 96], // NAT64 (embeds IPv4)
+];
+
+for (const [base, bits] of BLOCKED_IPV4) blockList.addSubnet(base, bits, 'ipv4');
+for (const [base, bits] of BLOCKED_IPV6) blockList.addSubnet(base, bits, 'ipv6');
+
+/**
+ * Returns true when the address is private, loopback, link-local or otherwise reserved.
+ * IPv4-mapped IPv6 (`::ffff:a.b.c.d` and the hex form `::ffff:xxxx:xxxx`, as produced by
+ * WHATWG URL parsing) is checked against the IPv4 ranges; BlockList does this on Node 24.
+ * Accepts bracketed IPv6 literals.
+ */
+export function isPrivateAddress(address: string): boolean {
+    const ip = stripBrackets(address);
+    const family = net.isIPv4(ip) ? 'ipv4' : net.isIPv6(ip) ? 'ipv6' : null;
+    if (!family) return false;
+    return blockList.check(ip, family);
 }
 
-export function isPrivateAddress(address: string): boolean {
-    const ip = address.startsWith('[') ? address.slice(1, -1) : address;
-    if (net.isIPv4(ip)) {
-        const n = ipv4ToInt(ip);
-        return IPV4_PRIVATE.some(([base, bits]) => {
-            const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
-            return (n & mask) >>> 0 === base;
-        });
-    }
-    if (net.isIPv6(ip)) {
-        const lower = ip.toLowerCase();
-        if (lower === '::1' || lower === '::') return true;
-        const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-        if (mapped) return isPrivateAddress(mapped[1]);
-        return /^f[cd]/.test(lower) || /^fe[89ab]/.test(lower);
-    }
-    return false;
+function stripBrackets(host: string): string {
+    return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
 }
 
 function isDevLoopback(hostname: string): boolean {
+    const host = stripBrackets(hostname);
     return (
         process.env.NODE_ENV !== 'production' &&
-        (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]')
+        (host === 'localhost' || host === '127.0.0.1' || host === '::1')
     );
 }
 
@@ -65,11 +83,11 @@ export async function assertPublicUrl(rawUrl: string): Promise<void> {
     }
     if (isDevLoopback(url.hostname)) return;
 
-    const host = url.hostname;
+    const host = stripBrackets(url.hostname);
     if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.internal')) {
         throw new Error('URL host is not allowed');
     }
-    if (net.isIP(host.replace(/^\[|\]$/g, ''))) {
+    if (net.isIP(host)) {
         if (isPrivateAddress(host)) throw new Error('URL host is not allowed');
         return;
     }
@@ -121,6 +139,7 @@ export async function verifyIdToken(
     await assertPublicUrl(opts.jwksUri);
     const response = await fetch(opts.jwksUri, {
         headers: { Accept: 'application/json' },
+        redirect: 'error',
         signal: AbortSignal.timeout(10000),
     });
     if (!response.ok) throw new Error('Failed to fetch issuer keys');

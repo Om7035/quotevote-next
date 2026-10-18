@@ -30,7 +30,10 @@ const EXPECTED_REDIRECT = "http://localhost/settings/solid/callback";
 
 let finishMock: jest.Mock;
 
+const ORIGINAL_SOLID_ENABLED = process.env.NEXT_PUBLIC_SOLID_ENABLED;
+
 beforeEach(() => {
+  process.env.NEXT_PUBLIC_SOLID_ENABLED = "true";
   mockSearchParamsString = "";
   mockReplace.mockReset();
   finishMock = jest.fn().mockResolvedValue({
@@ -46,7 +49,25 @@ beforeEach(() => {
   mockUseMutation.mockImplementation(() => [finishMock, { loading: false }]);
 });
 
+afterAll(() => {
+  if (ORIGINAL_SOLID_ENABLED === undefined) delete process.env.NEXT_PUBLIC_SOLID_ENABLED;
+  else process.env.NEXT_PUBLIC_SOLID_ENABLED = ORIGINAL_SOLID_ENABLED;
+});
+
 describe("SolidCallbackPage", () => {
+  it("shows a neutral unavailable message and never calls the API when the flag is off", async () => {
+    process.env.NEXT_PUBLIC_SOLID_ENABLED = "false";
+    mockSearchParamsString = `code=${CODE}&state=${STATE}`;
+
+    const { container } = render(<SolidCallbackPage />);
+
+    expect(await screen.findByText("Connecting a Pod is not available right now.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to Settings" })).toHaveAttribute("href", "/settings");
+    expect(finishMock).not.toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
+    expect(container.textContent ?? "").not.toContain(CODE);
+  });
+
   it("finishes the connection once and redirects to Settings on success", async () => {
     mockSearchParamsString = `code=${CODE}&state=${STATE}`;
 

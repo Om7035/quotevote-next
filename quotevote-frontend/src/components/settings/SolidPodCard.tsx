@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useApolloClient, useMutation, useQuery } from "@apollo/client/react";
+import { useLazyQuery, useMutation, useQuery } from "@apollo/client/react";
 import { Loader2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -61,9 +61,7 @@ export default function SolidPodCard({ displayName, bio, avatarUrl, theme }: Sol
   const [actionError, setActionError] = useState<SolidErrorInfo | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [pulled, setPulled] = useState<PortableState | null>(null);
-  const [pulling, setPulling] = useState(false);
 
-  const apolloClient = useApolloClient();
   const statusQuery = useQuery<SolidConnectionStatusData>(GET_SOLID_CONNECTION_STATUS, {
     fetchPolicy: "network-only",
   });
@@ -77,6 +75,11 @@ export default function SolidPodCard({ displayName, bio, avatarUrl, theme }: Sol
   >(SOLID_PUSH_PORTABLE_STATE);
   const [disconnect, { loading: disconnecting }] =
     useMutation<SolidDisconnectData>(SOLID_DISCONNECT);
+  // Pull only reads from the Pod, so it is a query, fetched on demand.
+  const [pullPortableState, { loading: pulling }] = useLazyQuery<SolidPullPortableStateData>(
+    SOLID_PULL_PORTABLE_STATE,
+    { fetchPolicy: "network-only" }
+  );
 
   const status = statusQuery.data?.solidConnectionStatus;
   const busy = connecting || pushing || pulling || disconnecting;
@@ -131,21 +134,19 @@ export default function SolidPodCard({ displayName, bio, avatarUrl, theme }: Sol
   const handlePull = async () => {
     setNotice(null);
     setActionError(null);
-    setPulling(true);
     try {
-      const { data } = await apolloClient.query<SolidPullPortableStateData>({
-        query: SOLID_PULL_PORTABLE_STATE,
-        fetchPolicy: "network-only",
-      });
-      if (!data) {
+      const result = await pullPortableState();
+      if (result.error) {
+        setActionError(mapSolidError(result.error));
+        return;
+      }
+      if (!result.data) {
         setActionError(mapSolidError(null));
         return;
       }
-      setPulled(data.solidPullPortableState);
+      setPulled(result.data.solidPullPortableState);
     } catch (err) {
       setActionError(mapSolidError(err));
-    } finally {
-      setPulling(false);
     }
   };
 

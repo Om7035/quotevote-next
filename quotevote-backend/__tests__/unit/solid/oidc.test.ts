@@ -1,10 +1,10 @@
 import { validateIssuerUrl } from '../../../app/solid/oidc/discovery';
 import {
-    parseIdToken,
     exchangeCodeForTokens,
     refreshAccessToken,
 } from '../../../app/solid/oidc/authorization';
 import { SolidOidcError } from '../../../app/solid/errors';
+import { generateDpopKeyPair } from '../../../app/solid/oidc/dpop';
 
 jest.mock('../../../app/solid/oidc/discovery', () => ({
     ...jest.requireActual('../../../app/solid/oidc/discovery'),
@@ -57,53 +57,6 @@ describe('Solid OIDC - Discovery and Authorization', () => {
         });
     });
 
-    describe('parseIdToken', () => {
-        it('should parse valid JWT', () => {
-            const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT' })).toString('base64url');
-            const payload = Buffer.from(JSON.stringify({
-                sub: '1234567890',
-                name: 'John Doe',
-                webid: 'https://example.com/profile#me'
-            })).toString('base64url');
-            const signature = 'test_signature';
-
-            const claims = parseIdToken(`${header}.${payload}.${signature}`);
-
-            expect(claims).toEqual({
-                sub: '1234567890',
-                name: 'John Doe',
-                webid: 'https://example.com/profile#me',
-            });
-        });
-
-        it('should throw error for invalid JWT format', () => {
-            expect(() => parseIdToken('invalid.jwt')).toThrow('Invalid JWT format');
-            expect(() => parseIdToken('invalid')).toThrow('Invalid JWT format');
-            expect(() => parseIdToken('')).toThrow('Invalid JWT format');
-        });
-
-        it('should throw a generic error for invalid JSON without echoing the payload', () => {
-            const header = Buffer.from('header').toString('base64url');
-            const payload = Buffer.from('secret-claims-not-json').toString('base64url');
-
-            let message = '';
-            try {
-                parseIdToken(`${header}.${payload}.signature`);
-            } catch (error) {
-                message = (error as Error).message;
-            }
-            expect(message).toBe('Invalid ID token payload');
-            expect(message).not.toMatch(/secret-claims/);
-        });
-
-        it('should reject a payload that is not a JSON object', () => {
-            const header = Buffer.from('h').toString('base64url');
-            const payload = Buffer.from('[1,2,3]').toString('base64url');
-
-            expect(() => parseIdToken(`${header}.${payload}.s`)).toThrow('Invalid ID token payload');
-        });
-    });
-
     describe('token endpoint errors', () => {
         const fetchMock = jest.fn();
 
@@ -112,11 +65,12 @@ describe('Solid OIDC - Discovery and Authorization', () => {
             global.fetch = fetchMock as unknown as typeof fetch;
         });
 
-        const jsonResponse = (status: number, body: unknown): Response =>
+        const jsonResponse = (status: number, body: unknown, headers: Record<string, string> = {}): Response =>
             ({
                 ok: status >= 200 && status < 300,
                 status,
                 statusText: 'x',
+                headers: new Headers(headers),
                 json: async () => body,
                 text: async () => JSON.stringify(body),
             }) as unknown as Response;
@@ -171,6 +125,64 @@ describe('Solid OIDC - Discovery and Authorization', () => {
             await expect(
                 exchangeCodeForTokens('c', 'v', 'https://app/cb', 'https://issuer.example', 'cid')
             ).resolves.toMatchObject({ access_token: 'a', expires_in: 60 });
+        });
+
+        it('never follows redirects on token requests', async () => {
+            fetchMock.mockResolvedValue(jsonResponse(200, { access_token: 'a', token_type: 'Bearer' }));
+
+            await refreshAccessToken('rt', 'https://issuer.example', 'cid');
+
+            expect(fetchMock.mock.calls[0][1].redirect).toBe('error');
+        });
+
+        it('sends a DPoP proof for the token endpoint when a key pair is supplied', async () => {
+            const keys = generateDpopKeyPair();
+            fetchMock.mockResolvedValue(jsonResponse(200, { access_token: 'a', token_type: 'DPoP' }));
+
+            await exchangeCodeForTokens('c', 'v', 'https://app/cb', 'https://issuer.example', 'cid', keys);
+
+            const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
+            const [h, c] = headers.DPoP.split('.');
+            expect(JSON.parse(Buffer.from(h, 'base64url').toString())).toMatchObject({ typ: 'dpop+jwt', alg: 'ES256' });
+            expect(JSON.parse(Buffer.from(c, 'base64url').toString())).toMatchObject({
+                htm: 'POST',
+                htu: 'https://issuer.example/token',
+            });
+        });
+
+        it('retries once with the DPoP-Nonce the provider asks for', async () => {
+            const keys = generateDpopKeyPair();
+            fetchMock
+                .mockResolvedValueOnce(jsonResponse(400, { error: 'use_dpop_nonce' }, { 'DPoP-Nonce': 'NONCE-XYZ' }))
+                .mockResolvedValueOnce(jsonResponse(200, { access_token: 'a', token_type: 'DPoP' }));
+
+            await expect(refreshAccessToken('rt', 'https://issuer.example', 'cid', keys)).resolves.toMatchObject({
+                access_token: 'a',
+            });
+
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+            const retryHeader = (fetchMock.mock.calls[1][1].headers as Record<string, string>).DPoP;
+            const claims = JSON.parse(Buffer.from(retryHeader.split('.')[1], 'base64url').toString());
+            expect(claims.nonce).toBe('NONCE-XYZ');
+        });
+
+        it('does not retry more than once, even when the nonce is rejected again', async () => {
+            const keys = generateDpopKeyPair();
+            fetchMock.mockResolvedValue(jsonResponse(401, { error: 'use_dpop_nonce' }, { 'DPoP-Nonce': 'N' }));
+
+            const error = await refreshAccessToken('rt', 'https://issuer.example', 'cid', keys).catch((e: unknown) => e);
+
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+            expect((error as SolidOidcError).code).toBe('provider_error');
+        });
+
+        it('does not retry without a DPoP key pair', async () => {
+            fetchMock.mockResolvedValue(jsonResponse(401, { error: 'x' }, { 'DPoP-Nonce': 'N' }));
+
+            await refreshAccessToken('rt', 'https://issuer.example', 'cid').catch(() => undefined);
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            expect(fetchMock.mock.calls[0][1].headers.DPoP).toBeUndefined();
         });
     });
 });
